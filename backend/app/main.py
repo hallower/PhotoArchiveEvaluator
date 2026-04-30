@@ -16,6 +16,7 @@ from fastapi import Depends, FastAPI
 from sqlalchemy import select
 from starlette.middleware.sessions import SessionMiddleware
 
+from .api.scan import router as scan_router
 from .auth.dependencies import require_auth
 from .auth.router import router as auth_router
 from .config import settings
@@ -78,6 +79,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(scan_router)
 
 
 @app.get("/healthz")
