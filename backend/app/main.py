@@ -12,7 +12,11 @@ import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
+from pathlib import Path
+
 from fastapi import Depends, FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -113,3 +117,35 @@ def healthz() -> dict:
 def me() -> dict:
     """인증 동작 검증용. 후속 사용자 프로필 엔드포인트로 확장 가능."""
     return {"authenticated": True}
+
+
+# 프론트엔드 정적 파일 서빙. /api/* 라우트는 위에서 먼저 매치되므로 안전.
+# 단일 페이지 앱(SPA): 알 수 없는 경로는 index.html로 폴백한다(프론트 라우팅을 위해).
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+
+
+def _mount_frontend() -> None:
+    if not _FRONTEND_DIST.exists():
+        return
+
+    # /assets/* 등 빌드된 정적 자원
+    app.mount(
+        "/assets",
+        StaticFiles(directory=_FRONTEND_DIST / "assets"),
+        name="assets",
+    )
+
+    @app.get("/", include_in_schema=False)
+    def _root() -> FileResponse:
+        return FileResponse(_FRONTEND_DIST / "index.html")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def _spa_fallback(full_path: str) -> FileResponse:
+        # /api나 /assets는 위에서 먼저 매치되므로 여기 도달하면 SPA 라우트로 간주.
+        candidate = _FRONTEND_DIST / full_path
+        if candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(_FRONTEND_DIST / "index.html")
+
+
+_mount_frontend()
