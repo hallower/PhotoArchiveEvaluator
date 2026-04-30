@@ -1,0 +1,29 @@
+name: Sync docs to Wiki
+
+# main 브랜치의 docs/ 변경을 GitHub Wiki에 자동 반영한다.
+# 최초 1회: GitHub 웹 UI에서 Wiki 탭으로 진입해 빈 페이지 하나를 생성·저장해야
+# 위키 저장소(<repo>.wiki.git)가 초기화된다. 이후부터는 자동.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/sync-wiki.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Push docs/ to Wiki
+        uses: Andrew-Chen-Wang/github-wiki-action@v4
+        with:
+          path: docs/
+          token: ${{ secrets.GITHUB_TOKEN }}
