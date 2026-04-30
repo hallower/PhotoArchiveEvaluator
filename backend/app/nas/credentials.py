@@ -22,7 +22,9 @@ from ..storage.models import Setting
 log = logging.getLogger(__name__)
 
 KEYRING_SERVICE = "PhotoArchiveEvaluator-NAS"
+KEYRING_DEVICE_SERVICE = "PhotoArchiveEvaluator-NAS-Device"
 SETTING_KEY = "nas.dsm"
+DEVICE_NAME = "PhotoArchiveEvaluator"
 
 
 @dataclass
@@ -68,6 +70,21 @@ def load_password(username: str) -> str | None:
     return keyring.get_password(KEYRING_SERVICE, username)
 
 
+def save_device_id(username: str, device_id: str) -> None:
+    keyring.set_password(KEYRING_DEVICE_SERVICE, username, device_id)
+
+
+def load_device_id(username: str) -> str | None:
+    return keyring.get_password(KEYRING_DEVICE_SERVICE, username)
+
+
+def clear_device_id(username: str) -> None:
+    try:
+        keyring.delete_password(KEYRING_DEVICE_SERVICE, username)
+    except keyring.errors.PasswordDeleteError:
+        pass
+
+
 def clear(session: Session) -> bool:
     config = load_config(session)
     if config is None:
@@ -76,6 +93,7 @@ def clear(session: Session) -> bool:
         keyring.delete_password(KEYRING_SERVICE, config.username)
     except keyring.errors.PasswordDeleteError:
         log.warning("password already absent in keyring")
+    clear_device_id(config.username)
     session.execute(
         Setting.__table__.delete().where(Setting.key == SETTING_KEY)
     )

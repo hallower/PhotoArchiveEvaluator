@@ -86,6 +86,7 @@ class DSMClient:
             verify=verify,
         )
         self._sid: str | None = None
+        self._device_id: str | None = None
 
     # ─── 컨텍스트 매니저 ────────────────────────────────────────────────
 
@@ -101,8 +102,23 @@ class DSMClient:
 
     # ─── 인증 ────────────────────────────────────────────────────────────
 
-    def login(self, username: str, password: str, otp_code: str | None = None) -> None:
-        """SYNO.API.Auth login. otp_code는 2FA 활성 계정에서만."""
+    def login(
+        self,
+        username: str,
+        password: str,
+        *,
+        otp_code: str | None = None,
+        device_id: str | None = None,
+        device_name: str | None = None,
+        enable_device_token: bool = False,
+    ) -> None:
+        """SYNO.API.Auth login.
+
+        2FA 계정:
+          - 최초: otp_code 전달 + enable_device_token=True → 응답의 did를 self.device_id로 받아
+                  키체인 등에 보관해두면 다음부터는 OTP 없이 로그인.
+          - 이후: device_id + device_name 전달 (otp_code 불필요).
+        """
         params: dict[str, str] = {
             "api": "SYNO.API.Auth",
             "version": "7",
@@ -114,13 +130,32 @@ class DSMClient:
         }
         if otp_code:
             params["otp_code"] = otp_code
+        if device_id:
+            params["device_id"] = device_id
+        if device_name:
+            params["device_name"] = device_name
+        if enable_device_token:
+            params["enable_device_token"] = "yes"
+
         resp = self._client.post(f"{self.base_url}/webapi/entry.cgi", data=params)
         resp.raise_for_status()
         data = resp.json()
         if not data.get("success"):
             raise DSMError(data.get("error", {}).get("code", -1), category="auth")
-        self._sid = data["data"]["sid"]
-        log.info("DSM login ok: %s sid=...%s", self.base_url, self._sid[-6:])
+        payload = data.get("data", {})
+        self._sid = payload["sid"]
+        self._device_id = payload.get("did")
+        log.info(
+            "DSM login ok: %s sid=...%s did=%s",
+            self.base_url,
+            self._sid[-6:],
+            "yes" if self._device_id else "no",
+        )
+
+    @property
+    def device_id(self) -> str | None:
+        """로그인 후 응답의 did. enable_device_token=True일 때만 채워진다."""
+        return self._device_id
 
     def logout(self) -> None:
         if not self._sid:

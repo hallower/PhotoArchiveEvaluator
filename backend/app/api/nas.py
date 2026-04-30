@@ -16,7 +16,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..auth.dependencies import require_auth
-from ..nas.credentials import DSMConfig, clear, load_config, load_password, save_config
+from ..nas.credentials import (
+    DEVICE_NAME,
+    DSMConfig,
+    clear,
+    load_config,
+    load_device_id,
+    load_password,
+    save_config,
+    save_device_id,
+)
 from ..nas.dsm import DSMClient, DSMError, query_api_info
 from ..storage.db import get_session
 
@@ -73,9 +82,17 @@ def test_connection(body: _NASCreds) -> dict:
 @router.post("/setup", status_code=status.HTTP_204_NO_CONTENT)
 def setup(body: _NASSetup, session: Session = Depends(get_session)) -> None:
     # 저장 전 검증 — 잘못된 자격증명을 키체인에 남기지 않는다.
+    # 2FA 활성 시 enable_device_token=True로 did를 받아 키체인에 보관, 다음부터 OTP 우회.
     try:
         with DSMClient(body.base_url) as client:
-            client.login(body.username, body.password, otp_code=body.otp_code)
+            client.login(
+                body.username,
+                body.password,
+                otp_code=body.otp_code,
+                enable_device_token=bool(body.use_otp or body.otp_code),
+                device_name=DEVICE_NAME,
+            )
+            device_id = client.device_id
     except DSMError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
@@ -86,6 +103,8 @@ def setup(body: _NASSetup, session: Session = Depends(get_session)) -> None:
         DSMConfig(base_url=body.base_url, username=body.username, use_otp=body.use_otp),
         body.password,
     )
+    if device_id:
+        save_device_id(body.username, device_id)
 
 
 @router.get("/status")
@@ -116,9 +135,15 @@ def list_folders(
     if password is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "password missing in keyring")
 
+    device_id = load_device_id(config.username)
     try:
         with DSMClient(config.base_url) as client:
-            client.login(config.username, password)
+            client.login(
+                config.username,
+                password,
+                device_id=device_id,
+                device_name=DEVICE_NAME if device_id else None,
+            )
             if not path:
                 items = client.list_shares()
                 # list_share 응답을 list 형태와 비슷하게 정규화
