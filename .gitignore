@@ -216,3 +216,72 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ─────────────────────────────────────────────────────────────
+# Photo Archive Evaluator — public repo 보호용 추가 패턴
+# ─────────────────────────────────────────────────────────────
+
+# 로컬 설정 / 비밀
+config.local.*
+*.local.yaml
+*.local.yml
+*.local.json
+*.local.toml
+secrets/
+secrets.yaml
+secrets.yml
+secrets.json
+.secrets/
+
+# 자격증명 / 키
+*.key
+*.pem
+*.pfx
+*.p12
+credentials.json
+credentials.yaml
+.credentials/
+.api_keys
+.anthropic
+.openai
+.google_ai
+
+# 데이터베이스 (SQLite)
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-journal
+
+# AI 모델 가중치 (대용량 + 라이선스 주의)
+models/
+*.pth
+*.pt
+*.bin
+*.safetensors
+*.onnx
+*.gguf
+*.ggml
+
+# 런타임 산출물 / 캐시
+data/
+cache/
+thumbs/
+thumbnails/
+embeddings/
+backups/
+logs/
+runtime/
+
+# PoC 출력
+poc_*.csv
+scores*.csv
+out/
+output/
+
+# 사용자 사진 샘플 (실수 커밋 방지)
+photos/
+sample_photos/
+test_photos/
