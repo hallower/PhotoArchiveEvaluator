@@ -21,6 +21,7 @@ from sqlalchemy import select
 from starlette.middleware.sessions import SessionMiddleware
 
 from .api.eval import router as eval_router
+from .api.nas import router as nas_router
 from .api.photos import router as photos_router
 from .api.scan import router as scan_router
 from .auth.dependencies import require_auth
@@ -93,6 +94,7 @@ app.include_router(auth_router)
 app.include_router(scan_router)
 app.include_router(eval_router)
 app.include_router(photos_router)
+app.include_router(nas_router)
 
 
 @app.get("/healthz")
