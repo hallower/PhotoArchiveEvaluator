@@ -16,10 +16,12 @@ from fastapi import Depends, FastAPI
 from sqlalchemy import select
 from starlette.middleware.sessions import SessionMiddleware
 
+from .api.eval import router as eval_router
 from .api.scan import router as scan_router
 from .auth.dependencies import require_auth
 from .auth.router import router as auth_router
 from .config import settings
+from .evaluator.worker import recover_pending
 from .storage.db import SessionLocal
 
 
@@ -58,9 +60,13 @@ def _resolve_session_secret() -> str:
 async def lifespan(app: FastAPI):
     _setup_logging()
     settings.thumb_dir.mkdir(parents=True, exist_ok=True)
-    logging.getLogger(__name__).info(
-        "startup: data_dir=%s db_url=%s", settings.data_dir, settings.db_url
-    )
+    logger = logging.getLogger(__name__)
+    logger.info("startup: data_dir=%s db_url=%s", settings.data_dir, settings.db_url)
+    # 비정상 종료된 in_progress 잡을 pending으로 복구 (SPEC §5.2)
+    with SessionLocal() as session:
+        recovered = recover_pending(session)
+    if recovered:
+        logger.info("recovered %d in_progress eval_jobs to pending", recovered)
     yield
 
 
@@ -80,6 +86,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(scan_router)
+app.include_router(eval_router)
 
 
 @app.get("/healthz")
