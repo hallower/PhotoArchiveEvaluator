@@ -124,7 +124,28 @@ export const api = {
   scan: {
     local: (folder: string) =>
       request<{ folder: string; queued: boolean }>("POST", "/api/scan/local", { folder }),
+    dsm: (folder: string) =>
+      request<{ folder: string; queued: boolean; nas_id: string }>(
+        "POST",
+        "/api/scan/dsm",
+        { folder },
+      ),
     jobs: () => request<ScanJob[]>("GET", "/api/scan/jobs?limit=10"),
+  },
+  nas: {
+    status: () =>
+      request<{
+        configured: boolean;
+        base_url?: string;
+        username?: string;
+        use_otp?: boolean;
+        password_in_keyring?: boolean;
+      }>("GET", "/api/nas/status"),
+    folders: (path: string = "") =>
+      request<{
+        path: string;
+        items: { name: string; path: string; isdir: boolean; size?: number }[];
+      }>("GET", `/api/nas/folders?path=${encodeURIComponent(path)}`),
   },
   eval: {
     queue: () => request<QueueCounts>("GET", "/api/eval/queue"),

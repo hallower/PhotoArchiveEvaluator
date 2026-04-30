@@ -14,6 +14,8 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..auth.dependencies import require_auth
+from ..nas.credentials import load_config, load_device_id, load_password
+from ..scanner.dsm import DSMScanner
 from ..scanner.local import LocalScanner
 from ..storage.db import SessionLocal, get_session
 from ..storage.models import ScanJob
@@ -29,6 +31,10 @@ class _LocalScanRequest(BaseModel):
     folder: str
 
 
+class _DSMScanRequest(BaseModel):
+    folder: str  # DSM 절대 경로 (예: /photo/My Pictures-2023)
+
+
 @router.post("/local", status_code=status.HTTP_202_ACCEPTED)
 def scan_local(req: _LocalScanRequest) -> dict:
     p = Path(req.folder).resolve()
@@ -39,6 +45,27 @@ def scan_local(req: _LocalScanRequest) -> dict:
     thread = threading.Thread(target=scanner.scan, args=(p,), daemon=True, name="scan-local")
     thread.start()
     return {"folder": str(p), "queued": True}
+
+
+@router.post("/dsm", status_code=status.HTTP_202_ACCEPTED)
+def scan_dsm(req: _DSMScanRequest, session: Session = Depends(get_session)) -> dict:
+    config = load_config(session)
+    if config is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "NAS not configured")
+    password = load_password(config.username)
+    if not password:
+        raise HTTPException(status.HTTP_409_CONFLICT, "NAS password missing")
+    device_id = load_device_id(config.username)
+
+    scanner = DSMScanner(SessionLocal, config, password, device_id=device_id)
+    thread = threading.Thread(
+        target=scanner.scan,
+        args=(req.folder,),
+        daemon=True,
+        name="scan-dsm",
+    )
+    thread.start()
+    return {"folder": req.folder, "queued": True, "nas_id": scanner.nas_id}
 
 
 @router.get("/jobs/{job_id}")

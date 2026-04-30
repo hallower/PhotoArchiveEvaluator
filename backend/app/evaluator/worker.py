@@ -21,6 +21,8 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from ..ai.base import ScoreModel
+from ..nas.dsm import DSMClient
+from ..nas.session import open_dsm_client
 from ..storage.models import EvalJob, Evaluation, PhotoPath
 
 log = logging.getLogger(__name__)
@@ -48,6 +50,7 @@ class EvaluatorWorker:
     ) -> None:
         self._session_factory = session_factory
         self._score_model = score_model
+        self._dsm_client: DSMClient | None = None
 
     @property
     def model(self) -> ScoreModel:
@@ -58,13 +61,24 @@ class EvaluatorWorker:
     def run(self, max_jobs: int | None = None) -> int:
         """큐를 처리한다. 처리한 작업 수 반환. pending이 비면 즉시 종료."""
         processed = 0
-        while max_jobs is None or processed < max_jobs:
-            with self._session_factory() as s:
-                got_one = self._process_one(s)
-            if not got_one:
-                break
-            processed += 1
+        try:
+            while max_jobs is None or processed < max_jobs:
+                with self._session_factory() as s:
+                    got_one = self._process_one(s)
+                if not got_one:
+                    break
+                processed += 1
+        finally:
+            self._close_dsm()
         return processed
+
+    def _close_dsm(self) -> None:
+        if self._dsm_client is not None:
+            try:
+                self._dsm_client.logout()
+            finally:
+                self._dsm_client._client.close()
+                self._dsm_client = None
 
     def _process_one(self, session: Session) -> bool:
         job = session.execute(
@@ -118,10 +132,22 @@ class EvaluatorWorker:
         ).scalar_one_or_none()
         if pp is None:
             raise RuntimeError(f"photo {photo_id} has no path")
-        path = Path(pp.path)
-        if not path.exists():
-            raise FileNotFoundError(f"file missing: {path}")
-        return self.model.score(path.read_bytes())
+        return self.model.score(self._read_bytes(session, pp))
+
+    def _read_bytes(self, session: Session, pp: PhotoPath) -> bytes:
+        if pp.nas_id == "local":
+            path = Path(pp.path)
+            if not path.exists():
+                raise FileNotFoundError(f"file missing: {path}")
+            return path.read_bytes()
+        if pp.nas_id.startswith("dsm:"):
+            return self._dsm(session).download(pp.path)
+        raise ValueError(f"unsupported nas_id: {pp.nas_id}")
+
+    def _dsm(self, session: Session) -> DSMClient:
+        if self._dsm_client is None:
+            self._dsm_client = open_dsm_client(session)
+        return self._dsm_client
 
 
 def recover_pending(session: Session) -> int:

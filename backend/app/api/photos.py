@@ -7,6 +7,7 @@ GET /api/photos/{id}/thumb   — 썸네일 (생성·캐싱)
 
 from __future__ import annotations
 
+import io
 import logging
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from sqlalchemy.orm import Session, aliased
 
 from ..auth.dependencies import require_auth
 from ..config import settings
+from ..nas.session import open_dsm_client
 from ..storage.db import get_session
 from ..storage.models import Evaluation, Photo, PhotoPath
 
@@ -208,12 +210,13 @@ def get_thumb(
         ).scalar_one_or_none()
         if pp is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "photo path not found")
-        src = Path(pp.path)
-        if not src.exists():
-            raise HTTPException(status.HTTP_410_GONE, "source file missing")
+        try:
+            src = _open_source_image(session, pp)
+        except FileNotFoundError as exc:
+            raise HTTPException(status.HTTP_410_GONE, "source file missing") from exc
         try:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
-            with Image.open(src) as img:
+            with src as img:
                 img = ImageOps.exif_transpose(img).convert("RGB")
                 img.thumbnail((size, size), Image.LANCZOS)
                 img.save(cache_path, "JPEG", quality=82, optimize=True)
@@ -221,3 +224,17 @@ def get_thumb(
             log.warning("thumb generation failed for %d: %s", photo_id, exc)
             raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "thumb generation failed") from exc
     return FileResponse(cache_path, media_type="image/jpeg")
+
+
+def _open_source_image(session: Session, pp: PhotoPath):
+    """원본 사진 바이트를 PIL Image로 연다 (로컬 / DSM 자동 분기)."""
+    if pp.nas_id == "local":
+        path = Path(pp.path)
+        if not path.exists():
+            raise FileNotFoundError(str(path))
+        return Image.open(path)
+    if pp.nas_id.startswith("dsm:"):
+        with open_dsm_client(session) as client:
+            data = client.download(pp.path)
+        return Image.open(io.BytesIO(data))
+    raise FileNotFoundError(f"unsupported nas_id: {pp.nas_id}")

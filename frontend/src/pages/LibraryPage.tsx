@@ -49,11 +49,39 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
   }, [fetchQueue]);
 
   const triggerScan = async () => {
-    const folder = window.prompt("스캔할 폴더 절대경로:");
+    const folder = window.prompt("로컬 폴더 절대경로:");
     if (!folder) return;
     try {
       await api.scan.local(folder);
-      alert("스캔이 백그라운드로 시작되었습니다.");
+      alert("로컬 스캔이 백그라운드로 시작되었습니다.");
+    } catch (e) {
+      alert(`실패: ${e instanceof Error ? e.message : e}`);
+    }
+  };
+
+  const triggerNasScan = async () => {
+    let nasStatus;
+    try {
+      nasStatus = await api.nas.status();
+    } catch (e) {
+      alert(`NAS 상태 조회 실패: ${e instanceof Error ? e.message : e}`);
+      return;
+    }
+    if (!nasStatus.configured) {
+      alert(
+        "NAS가 아직 설정되지 않았습니다.\n" +
+          "PowerShell에서 'python -m scripts.nas_login --url http://NAS:5000 --user <USER>'을 먼저 실행하세요.",
+      );
+      return;
+    }
+    const folder = window.prompt(
+      `NAS 폴더 절대경로 (예: /photo/My Pictures-2023):\n계정: ${nasStatus.username} @ ${nasStatus.base_url}`,
+      "/photo",
+    );
+    if (!folder) return;
+    try {
+      await api.scan.dsm(folder);
+      alert("NAS 스캔이 백그라운드로 시작되었습니다.");
     } catch (e) {
       alert(`실패: ${e instanceof Error ? e.message : e}`);
     }
@@ -74,7 +102,10 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
         <h1>Photo Archive Evaluator</h1>
         <div className="header-right">
           <button className="ghost" onClick={triggerScan}>
-            스캔
+            로컬 스캔
+          </button>
+          <button className="ghost" onClick={triggerNasScan}>
+            NAS 스캔
           </button>
           <button className="ghost" onClick={triggerEval}>
             평가 처리
