@@ -28,6 +28,15 @@ class Settings(BaseSettings):
     data_dir: Path = Path("./data")
     db_url: str = "sqlite:///./data/photo_archive.sqlite"
 
+    # 세션 / 쿠키
+    session_secret_env: str = ""
+    """비어 있으면 data_dir/session.key를 자동 생성·재사용. 환경변수로 강제 가능."""
+
+    cookie_secure: bool = False
+    """HTTPS 배포 시 True. LAN HTTP 개발은 False(기본)."""
+
+    cookie_max_age_days: int = 30
+
     @property
     def thumb_dir(self) -> Path:
         return self.data_dir / "thumbs"
