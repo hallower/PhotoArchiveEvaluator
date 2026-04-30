@@ -14,6 +14,7 @@ NAS에 저장된 사진을 자동으로 인식·평가하여 포트폴리오 구
 | [ARCHITECTURE](ARCHITECTURE) | 시스템 구성, 컴포넌트, 디렉터리, 데이터 흐름, 기술 스택 |
 | [SCHEMA](SCHEMA) | DB 스키마, DDL, 인덱스, 제약, 마이그레이션 정책 |
 | [POC_REPORT](POC_REPORT) | Phase 1 PoC 측정 결과 (속도, 점수 분포, 정규화 결정) |
+| [USAGE](USAGE) | **실행 방법 / 일상 사용** — 설치·DB·UI·CLI·트러블슈팅 |
 
 ---
 

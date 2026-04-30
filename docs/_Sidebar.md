@@ -6,6 +6,7 @@
 - [ARCHITECTURE — 아키텍처](ARCHITECTURE)
 - [SCHEMA — DB 스키마](SCHEMA)
 - [POC_REPORT — Phase 1 측정 결과](POC_REPORT)
+- [USAGE — 실행 방법](USAGE)
 
 ---
 
