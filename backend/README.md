@@ -25,11 +25,14 @@ python -m venv .venv
 pip install -e .
 ```
 
-GPU 사용 시 PyTorch는 CUDA 빌드를 따로 설치하는 것이 안정적이다.
+GPU 사용 시 PyTorch는 CUDA 빌드를 따로 설치한다.
 
 ```powershell
-pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu124
+# Python 3.14 + RTX 40 시리즈 검증된 조합 (PoC 사용)
+pip install --upgrade --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128
 ```
+
+Python 3.13 이하라면 `cu124`도 사용 가능. 본인 환경에 맞춰 선택.
 
 Aesthetic Predictor V2.5는 PyPI 패키지가 없으므로 별도 설치한다.
 

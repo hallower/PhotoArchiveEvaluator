@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "NAS 사진을 자동 인식·평가하는 도구 (백엔드)"
 requires-python = ">=3.11"
 readme = "README.md"
-license = { file = "../LICENSE" }
+license = "MIT"
 authors = [{ name = "hallower" }]
 
 # Phase 1 PoC 의존성.

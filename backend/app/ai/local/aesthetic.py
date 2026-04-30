@@ -2,8 +2,19 @@
 
 upstream: https://github.com/discus0434/aesthetic-predictor-v2-5
 
-모델은 약 1.0 - 10.0 스케일로 점수를 출력한다. 우리는 SPEC에 맞춰 1.0 - 5.0으로
-정규화하되, 원본 점수도 함께 보존한다(추후 임계값 캘리브레이션용).
+모델 raw 출력은 명목상 1–10 스케일이지만, 실제 사진 라이브러리에서는
+대부분 3–8 범위에 분포한다(PoC 측정). SPEC의 1–5점에 매핑하기 위해
+`raw - 2`로 시프트한 뒤 [1, 5]로 클램프한다.
+
+대응 의미:
+  raw  3 → 1점 (poor)
+  raw  4 → 2점 (mediocre)
+  raw  5 → 3점 (decent)
+  raw  6 → 4점 (strong, contest-worthy)
+  raw  7 → 5점 (excellent, portfolio-worthy)
+
+raw_score는 항상 보존하므로 추후 사용자 라이브러리에 맞춘 재캘리브레이션이
+가능하다(percentile 기반 등).
 """
 
 from __future__ import annotations
@@ -29,7 +40,7 @@ class AestheticV25:
         dtype: torch.dtype | None = None,
     ) -> None:
         # 지연 import: 패키지 미설치 시에도 모듈 로딩만으로는 실패하지 않게 한다.
-        from aesthetics_predictor import convert_v2_5_from_siglip
+        from aesthetic_predictor_v2_5 import convert_v2_5_from_siglip
 
         self.device: str = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.dtype: torch.dtype = dtype or (
@@ -54,7 +65,7 @@ class AestheticV25:
         with torch.inference_mode():
             raw = self._model(pixel_values).logits.squeeze().float().cpu().item()
 
-        normalized = max(1.0, min(5.0, raw / 2.0))
+        normalized = max(1.0, min(5.0, raw - 2.0))
 
         return ScoreResult(
             score=normalized,

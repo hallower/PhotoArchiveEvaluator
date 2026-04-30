@@ -47,10 +47,10 @@ def main(folder: Path, device: str | None, out_path: Path, limit: int | None) ->
         photos = photos[:limit]
 
     if not photos:
-        click.echo(f"JPG 파일을 찾지 못했습니다: {folder}", err=True)
+        click.echo(f"No JPG files found in: {folder}", err=True)
         sys.exit(1)
 
-    click.echo(f"[*] {len(photos)}개 사진 처리. 모델 로딩 중...")
+    click.echo(f"[*] {len(photos)} photos to process. Loading model...")
     model = AestheticV25(device=device)
     click.echo(f"[*] device={model.device}, dtype={model.dtype}")
 
@@ -61,11 +61,11 @@ def main(folder: Path, device: str | None, out_path: Path, limit: int | None) ->
         writer = csv.DictWriter(f, fieldnames=["path", "score", "raw_score"])
         writer.writeheader()
 
-        for path in tqdm(photos, desc="평가"):
+        for path in tqdm(photos, desc="score"):
             try:
                 result = model.score(path.read_bytes())
             except Exception as exc:
-                tqdm.write(f"[!] 실패 {path.name}: {exc}")
+                tqdm.write(f"[!] failed {path.name}: {exc}")
                 failures += 1
                 continue
 
@@ -79,19 +79,19 @@ def main(folder: Path, device: str | None, out_path: Path, limit: int | None) ->
             bucket = min(4, max(0, int(result.score) - 1))
             histogram[bucket] += 1
 
-    click.echo(f"\n[+] CSV 저장: {out_path}")
-    click.echo("\n점수 분포 (1-5)")
+    click.echo(f"\n[+] CSV saved: {out_path}")
+    click.echo("\nScore distribution (1-5)")
     total = sum(histogram)
     for i, count in enumerate(histogram, start=1):
         bar = "#" * int(40 * count / max(total, 1))
-        click.echo(f"  {i}점: {count:5d}  {bar}")
+        click.echo(f"  {i}: {count:5d}  {bar}")
 
     above_4 = histogram[3] + histogram[4]
     pct = 100 * above_4 / max(total, 1)
-    click.echo(f"\n표시 임계값 4점 이상: {above_4} / {total} ({pct:.1f}%)")
+    click.echo(f"\nAbove threshold (>=4): {above_4} / {total} ({pct:.1f}%)")
 
     if failures:
-        click.echo(f"실패: {failures} 건", err=True)
+        click.echo(f"failed: {failures}", err=True)
 
 
 if __name__ == "__main__":
