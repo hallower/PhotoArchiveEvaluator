@@ -38,6 +38,9 @@ export interface AppSettings {
   default_library_min_score: number;
   scan_local_paths: string[];
   scan_dsm_paths: string[];
+  eval_max_workers: number;
+  default_eval_max_workers: number;
+  max_allowed_workers: number;
 }
 
 export interface PhotoListResponse {
@@ -283,6 +286,7 @@ export const api = {
       library_min_score: number;
       scan_local_paths: string[];
       scan_dsm_paths: string[];
+      eval_max_workers: number;
     }>) =>
       request<{ ok: boolean; prompt_rescored: boolean }>(
         "PUT",

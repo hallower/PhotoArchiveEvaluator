@@ -105,6 +105,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
         library_min_score: s.library_min_score,
         scan_local_paths: s.scan_local_paths,
         scan_dsm_paths: s.scan_dsm_paths,
+        eval_max_workers: s.eval_max_workers,
       });
       setInfo(
         r.prompt_rescored
@@ -164,6 +165,29 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
             }
             style={{ width: 120 }}
           />
+        </Section>
+
+        <Section title="동시 평가 워커 수">
+          <p style={{ color: "var(--text-dim)", fontSize: 12, margin: "0 0 8px 0" }}>
+            평가 큐를 처리하는 백그라운드 워커 수. 단일 GPU에서 NAS 다운로드와 GPU 추론을
+            오버랩하기 위함이며, 2가 sweet spot입니다 (단일 GPU + I/O 병렬).
+            너무 크면 VRAM/메모리 압박, 너무 작으면 다운로드 대기로 GPU가 놉니다.
+            <br />
+            <strong>변경 후 서버 재시작</strong>이 필요합니다 (현재 워커는 그대로 동작).
+          </p>
+          <input
+            type="number"
+            min={1}
+            max={s.max_allowed_workers}
+            value={s.eval_max_workers}
+            onChange={(e) =>
+              update({ eval_max_workers: parseInt(e.target.value, 10) || 1 })
+            }
+            style={{ width: 120 }}
+          />
+          <span style={{ color: "var(--text-dim)", fontSize: 11, marginLeft: 8 }}>
+            기본 {s.default_eval_max_workers} / 최대 {s.max_allowed_workers}
+          </span>
         </Section>
 
         <Section title="평가 prompt">

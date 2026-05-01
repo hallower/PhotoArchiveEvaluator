@@ -15,6 +15,7 @@ from .storage.models import Setting
 
 # 키 상수
 EVAL_PROMPT = "eval.prompt"
+EVAL_MAX_WORKERS = "eval.max_workers"
 LIBRARY_MIN_SCORE = "library.min_score"
 SCAN_LOCAL_PATHS = "scan.local.paths"  # JSON list[str]
 SCAN_DSM_PATHS = "scan.dsm.paths"  # JSON list[str]
@@ -25,6 +26,8 @@ DEFAULT_EVAL_PROMPT = (
     "a photography portfolio or contest"
 )
 DEFAULT_MIN_SCORE = 4.0
+DEFAULT_MAX_WORKERS = 2  # GPU 1개 + 다운로드 오버랩 가정 시 2가 sweet spot
+MAX_ALLOWED_WORKERS = 6
 
 
 def _utc_now() -> datetime:
@@ -62,6 +65,22 @@ def get_min_score(session: Session) -> float:
 
 def set_min_score(session: Session, value: float) -> None:
     set_value(session, LIBRARY_MIN_SCORE, str(value))
+
+
+def get_max_workers(session: Session) -> int:
+    raw = get(session, EVAL_MAX_WORKERS)
+    if raw is None:
+        return DEFAULT_MAX_WORKERS
+    try:
+        n = int(raw)
+        return max(1, min(MAX_ALLOWED_WORKERS, n))
+    except ValueError:
+        return DEFAULT_MAX_WORKERS
+
+
+def set_max_workers(session: Session, n: int) -> None:
+    n = max(1, min(MAX_ALLOWED_WORKERS, int(n)))
+    set_value(session, EVAL_MAX_WORKERS, str(n))
 
 
 def get_paths_list(session: Session, key: str) -> list[str]:

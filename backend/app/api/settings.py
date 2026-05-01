@@ -21,13 +21,17 @@ from ..scanner.dsm import DSMScanner
 from ..scanner.local import LocalScanner
 from ..settings_store import (
     DEFAULT_EVAL_PROMPT,
+    DEFAULT_MAX_WORKERS,
     DEFAULT_MIN_SCORE,
     EVAL_PROMPT,
+    MAX_ALLOWED_WORKERS,
     SCAN_DSM_PATHS,
     SCAN_LOCAL_PATHS,
     get_eval_prompt,
+    get_max_workers,
     get_min_score,
     get_paths_list,
+    set_max_workers,
     set_min_score,
     set_paths_list,
     set_value,
@@ -46,6 +50,7 @@ class _SettingsUpdate(BaseModel):
     library_min_score: float | None = Field(default=None, ge=0.0, le=5.0)
     scan_local_paths: list[str] | None = None
     scan_dsm_paths: list[str] | None = None
+    eval_max_workers: int | None = Field(default=None, ge=1, le=MAX_ALLOWED_WORKERS)
 
 
 @router.get("")
@@ -57,6 +62,9 @@ def get_settings(session: Session = Depends(get_session)) -> dict:
         "default_library_min_score": DEFAULT_MIN_SCORE,
         "scan_local_paths": get_paths_list(session, SCAN_LOCAL_PATHS),
         "scan_dsm_paths": get_paths_list(session, SCAN_DSM_PATHS),
+        "eval_max_workers": get_max_workers(session),
+        "default_eval_max_workers": DEFAULT_MAX_WORKERS,
+        "max_allowed_workers": MAX_ALLOWED_WORKERS,
     }
 
 
@@ -80,6 +88,9 @@ def put_settings(
 
     if body.scan_dsm_paths is not None:
         set_paths_list(session, SCAN_DSM_PATHS, body.scan_dsm_paths)
+
+    if body.eval_max_workers is not None:
+        set_max_workers(session, body.eval_max_workers)
 
     # prompt가 바뀌었으면 백그라운드 재평가 큐
     if prompt_changed:

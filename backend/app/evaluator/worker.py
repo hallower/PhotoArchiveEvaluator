@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import threading
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,14 @@ from ..storage.models import Embedding, EvalJob, Evaluation, PhotoPath
 log = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 3
+
+# GPU 직렬화: 다중 워커가 model.forward()를 동시에 호출하면 PyTorch 내부 상태가
+# 깨질 수 있어 단일 GPU에서는 lock으로 직렬화한다. 모델 forward 자체는 짧고
+# (~0.7s), I/O(다운로드, DB)는 lock 밖에서 병렬 진행되므로 다중 워커 효과가 있다.
+_gpu_lock = threading.Lock()
+
+# DSM 클라이언트 초기화 race 방지
+_dsm_init_lock = threading.Lock()
 
 
 def _utc_now() -> datetime:
@@ -97,8 +106,12 @@ class EvaluatorWorker:
         """프롬프트의 CLIP text embedding을 캐시. 동일 prompt면 재사용."""
         if self._prompt_text_cache and self._prompt_text_cache[0] == prompt:
             return self._prompt_text_cache[1]
-        result = self.embed.embed_text(prompt)
-        self._prompt_text_cache = (prompt, result.vector)
+        with _gpu_lock:
+            # double-check after acquiring lock
+            if self._prompt_text_cache and self._prompt_text_cache[0] == prompt:
+                return self._prompt_text_cache[1]
+            result = self.embed.embed_text(prompt)
+            self._prompt_text_cache = (prompt, result.vector)
         return result.vector
 
     def run(self, max_jobs: int | None = None) -> int:
@@ -157,11 +170,13 @@ class EvaluatorWorker:
         photo_id = job.photo_id
 
         try:
+            # I/O — lock 밖에서 병렬 (다운로드는 워커 간 동시 진행)
             content = self._read_for_photo(session, photo_id)
-            score_result = self.model.score(content)
-            # CLIP image embedding (저장)
-            image_emb = self.embed.embed_image(content)
-            # 사용자 prompt와의 cosine similarity → 1-5
+            # GPU 직렬화 — 단일 GPU에서 model forward가 racing하지 않게 lock
+            with _gpu_lock:
+                score_result = self.model.score(content)
+                image_emb = self.embed.embed_image(content)
+            # CPU/DB — lock 밖
             prompt_text = get_eval_prompt(session)
             text_vec = self._prompt_text_vector(prompt_text)
             sim = cosine_similarity(image_emb.vector, text_vec)
@@ -226,7 +241,9 @@ class EvaluatorWorker:
 
     def _dsm(self, session: Session) -> DSMClient:
         if self._dsm_client is None:
-            self._dsm_client = open_dsm_client(session)
+            with _dsm_init_lock:
+                if self._dsm_client is None:
+                    self._dsm_client = open_dsm_client(session)
         return self._dsm_client
 
 
