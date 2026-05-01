@@ -20,9 +20,11 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from starlette.middleware.sessions import SessionMiddleware
 
+from .api.backup import router as backup_router
 from .api.eval import router as eval_router
 from .api.nas import router as nas_router
 from .api.photos import router as photos_router
+from .api.portfolios import router as portfolios_router
 from .api.scan import router as scan_router
 from .api.settings import router as settings_router
 from .auth.dependencies import require_auth
@@ -97,6 +99,8 @@ app.include_router(eval_router)
 app.include_router(photos_router)
 app.include_router(nas_router)
 app.include_router(settings_router)
+app.include_router(portfolios_router)
+app.include_router(backup_router)
 
 
 @app.get("/healthz")

@@ -13,6 +13,15 @@ export function PhotoModal({
   const [similar, setSimilar] = useState<
     { id: number; hamming: number; thumb_url: string }[] | null
   >(null);
+  const [selectedPaths, setSelectedPaths] = useState<Set<number>>(new Set());
+
+  const togglePath = (id: number) =>
+    setSelectedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   const load = () =>
     api.photos.detail(photoId).then(setDetail).catch(() => setDetail(null));
@@ -40,6 +49,60 @@ export function PhotoModal({
         await api.photos.setUserScore(photoId, score);
       }
       await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteSelectedPaths = async () => {
+    if (!detail || selectedPaths.size === 0) return;
+    const localCount = detail.paths.filter(
+      (p) => p.nas_id === "local" && selectedPaths.has(p.id),
+    ).length;
+    let alsoFiles = false;
+    if (localCount > 0) {
+      alsoFiles = window.confirm(
+        `${selectedPaths.size}개 경로를 라이브러리에서 제거합니다.\n` +
+          `로컬 경로 ${localCount}개의 디스크 원본 파일도 삭제할까요?\n` +
+          "확인 = 로컬 원본 삭제 / 취소 = DB 레코드만 삭제",
+      );
+    } else if (
+      !window.confirm(`${selectedPaths.size}개 경로를 라이브러리에서 제거합니다.`)
+    ) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await api.photos.deletePaths(detail.id, [...selectedPaths], alsoFiles);
+      setSelectedPaths(new Set());
+      if (r.remaining_paths === 0) {
+        alert("모든 경로 제거됨 — 사진은 missing 상태가 되었습니다.");
+        onClose();
+      } else {
+        await load();
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deletePhoto = async () => {
+    if (!detail) return;
+    if (
+      !window.confirm(
+        "이 사진을 라이브러리에서 완전히 삭제할까요?\n" +
+          "(DB 레코드, 평가, 임베딩, 썸네일 캐시 모두 삭제. 디스크 원본은 보존)",
+      )
+    )
+      return;
+    const alsoFiles = window.confirm(
+      "추가로 로컬 디스크의 원본 파일도 삭제할까요?\n" +
+        "확인 = 로컬 원본 삭제 / 취소 = DB만 삭제",
+    );
+    setBusy(true);
+    try {
+      await api.photos.bulkDelete([detail.id], alsoFiles);
+      onClose();
     } finally {
       setBusy(false);
     }
@@ -132,9 +195,60 @@ export function PhotoModal({
                 <dd style={{ fontSize: 10, color: "var(--text-dim)" }}>
                   {detail.phash ?? "-"}
                 </dd>
-                <dt>경로</dt>
-                <dd style={{ fontSize: 10 }}>{detail.paths[0]?.path ?? "-"}</dd>
+                <dt>경로 ({detail.paths.length})</dt>
+                <dd style={{ fontSize: 10, display: "flex", flexDirection: "column", gap: 4 }}>
+                  {detail.paths.map((p) => (
+                    <label
+                      key={p.id}
+                      style={{
+                        display: "flex",
+                        gap: 6,
+                        alignItems: "flex-start",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedPaths.has(p.id)}
+                        onChange={() => togglePath(p.id)}
+                      />
+                      <span style={{ flex: 1, wordBreak: "break-all" }}>
+                        <span style={{ color: "var(--text-dim)" }}>[{p.nas_id}] </span>
+                        {p.path}
+                      </span>
+                    </label>
+                  ))}
+                  {selectedPaths.size > 0 && (
+                    <button
+                      type="button"
+                      onClick={deleteSelectedPaths}
+                      disabled={busy}
+                      style={{
+                        marginTop: 4,
+                        padding: "3px 8px",
+                        fontSize: 11,
+                        background: "var(--danger)",
+                        alignSelf: "flex-start",
+                      }}
+                    >
+                      선택 경로 {selectedPaths.size}개 삭제
+                    </button>
+                  )}
+                </dd>
               </dl>
+
+              <button
+                className="ghost"
+                onClick={deletePhoto}
+                disabled={busy}
+                style={{
+                  marginTop: 14,
+                  background: "var(--danger)",
+                  color: "white",
+                }}
+              >
+                이 사진 삭제
+              </button>
 
               <button
                 className="ghost"

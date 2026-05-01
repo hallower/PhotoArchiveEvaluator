@@ -1,15 +1,34 @@
 import { useEffect, useState } from "react";
-import { api, type AppSettings } from "../api";
+import { api, type AppSettings, type BackupRecord } from "../api";
 
 export function SettingsPage({ onClose }: { onClose: () => void }) {
   const [s, setS] = useState<AppSettings | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [backups, setBackups] = useState<BackupRecord[]>([]);
 
   useEffect(() => {
     void api.settings.get().then(setS);
+    void api.backup.list().then(setBackups).catch(() => {});
   }, []);
+
+  const triggerBackup = async () => {
+    setBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      await api.backup.trigger();
+      setInfo("백업이 백그라운드로 시작됨. 잠시 후 목록 새로고침.");
+      setTimeout(() => {
+        void api.backup.list().then(setBackups);
+      }, 3000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   if (!s) {
     return (
@@ -127,6 +146,45 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
             onChange={(scan_dsm_paths) => update({ scan_dsm_paths })}
             placeholder='DSM 절대경로 (예: /photo/My Pictures-2023)'
           />
+        </Section>
+
+        <Section title="DB 백업">
+          <p style={{ color: "var(--text-dim)", fontSize: 12, margin: "0 0 8px 0" }}>
+            현재 SQLite DB를 NAS의 <code>/photo/.photoarchive/backups/</code> 폴더로 즉시 복사합니다.
+            NAS 미설정 시 로컬 <code>data/backups/</code>로 fallback. 사진 원본은 백업 대상이 아닙니다.
+          </p>
+          <button onClick={triggerBackup} disabled={busy} style={{ alignSelf: "flex-start" }}>
+            지금 백업
+          </button>
+          {backups.length > 0 && (
+            <div style={{ marginTop: 8, fontSize: 11, color: "var(--text-dim)" }}>
+              {backups.slice(0, 5).map((b) => (
+                <div key={b.id} style={{ display: "flex", gap: 8, padding: "3px 0" }}>
+                  <span style={{ width: 30 }}>#{b.id}</span>
+                  <span
+                    style={{
+                      width: 60,
+                      color:
+                        b.state === "done"
+                          ? "var(--score-4)"
+                          : b.state === "failed"
+                          ? "var(--danger)"
+                          : "var(--text-dim)",
+                    }}
+                  >
+                    {b.state}
+                  </span>
+                  <span style={{ width: 80 }}>
+                    {b.size_bytes ? `${Math.round(b.size_bytes / 1024)}KB` : "-"}
+                  </span>
+                  <span style={{ width: 60 }}>{b.photo_count ?? "-"}장</span>
+                  <span style={{ flex: 1, wordBreak: "break-all" }}>
+                    {b.nas_path ?? b.error ?? ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </Section>
 
         <div

@@ -175,6 +175,45 @@ class UserScore(Base):
     updated_at: Mapped[datetime] = mapped_column(default=_utc_now, onupdate=_utc_now)
 
 
+class Portfolio(Base):
+    __tablename__ = "portfolios"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str]
+    description: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(default=_utc_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_utc_now, onupdate=_utc_now)
+
+
+class PortfolioItem(Base):
+    __tablename__ = "portfolio_items"
+
+    portfolio_id: Mapped[int] = mapped_column(
+        ForeignKey("portfolios.id", ondelete="CASCADE"), primary_key=True
+    )
+    photo_id: Mapped[int] = mapped_column(
+        ForeignKey("photos.id", ondelete="CASCADE"), primary_key=True
+    )
+    source: Mapped[str] = mapped_column(default="manual")  # 'manual' | 'ai_suggested'
+    confirmed: Mapped[int] = mapped_column(default=1)  # AI 추천 후 사용자 확정 여부
+    rank: Mapped[int | None] = mapped_column(default=None)
+    note: Mapped[str | None] = mapped_column(Text, default=None)
+    added_at: Mapped[datetime] = mapped_column(default=_utc_now)
+
+
+class Backup(Base):
+    __tablename__ = "backups"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(default=_utc_now)
+    finished_at: Mapped[datetime | None] = mapped_column(default=None)
+    state: Mapped[str]  # running | done | failed
+    nas_path: Mapped[str | None] = mapped_column(Text, default=None)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger, default=None)
+    photo_count: Mapped[int | None] = mapped_column(default=None)
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+
+
 class Setting(Base):
     """런타임 설정. config.py와 분리 — 런타임 변경 가능 항목만 여기에 둔다."""
 

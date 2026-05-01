@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, type PhotoSummary, type QueueCounts } from "../api";
+import { api, type PhotoSummary, type PortfolioSummary, type QueueCounts } from "../api";
 import { PhotoModal } from "./PhotoModal";
+import { PortfoliosPage } from "./PortfoliosPage";
 import { SettingsPage } from "./SettingsPage";
 
 const SORT_OPTIONS = [
@@ -20,12 +21,25 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
   const [minScore, setMinScore] = useState<number>(4.0);
   const [sort, setSort] = useState<string>("-taken_at");
   const [loading, setLoading] = useState(false);
-  const [selected, setSelected] = useState<number | null>(null);
+  const [openPhotoId, setOpenPhotoId] = useState<number | null>(null);
   const [queue, setQueue] = useState<QueueCounts | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchActive, setSearchActive] = useState(false);
   const [keyword, setKeyword] = useState("");
+  const [selected, setSelectedSet] = useState<Set<number>>(new Set());
+  const [showPortfolios, setShowPortfolios] = useState(false);
+  const [portfolios, setPortfolios] = useState<PortfolioSummary[]>([]);
+
+  const toggleSelected = (id: number) =>
+    setSelectedSet((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const clearSelection = () => setSelectedSet(new Set());
+  const selectAll = () => setSelectedSet(new Set(photos.map((p) => p.id)));
 
   const fetchList = useCallback(async () => {
     setLoading(true);
@@ -162,6 +176,80 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
     }
   };
 
+  const refreshPortfolios = useCallback(() => {
+    void api.portfolios.list().then(setPortfolios).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refreshPortfolios();
+  }, [refreshPortfolios]);
+
+  const bulkDelete = async () => {
+    if (selected.size === 0) return;
+    const deleteFiles = window.confirm(
+      `${selected.size}개 사진을 라이브러리에서 삭제합니다.\n\n` +
+        "확인을 누르면: DB 레코드 + 썸네일 캐시 삭제 (NAS/디스크 원본 보존)\n" +
+        "취소를 누르면 작업 중단",
+    );
+    if (!deleteFiles) return;
+    const alsoFiles = window.confirm(
+      "추가로 로컬 디스크의 원본 파일까지 삭제할까요?\n" +
+        "확인 = 로컬 원본 파일 삭제 (NAS는 항상 보존)\n" +
+        "취소 = DB만 삭제",
+    );
+    try {
+      const r = await api.photos.bulkDelete([...selected], alsoFiles);
+      alert(
+        `삭제됨: ${r.deleted}장${alsoFiles ? `, 파일 삭제: ${r.files_deleted}` : ""}`,
+      );
+      clearSelection();
+      void fetchList();
+    } catch (e) {
+      alert(`실패: ${e instanceof Error ? e.message : e}`);
+    }
+  };
+
+  const addToPortfolio = async () => {
+    if (selected.size === 0) return;
+    let target: number | "new" | null = null;
+    if (portfolios.length === 0) {
+      target = "new";
+    } else {
+      const choices = portfolios
+        .map((p, i) => `${i + 1}. ${p.name} (${p.count})`)
+        .join("\n");
+      const ans = window.prompt(
+        `포트폴리오 선택 (번호 입력, 새로 만들려면 "new"):\n\n${choices}`,
+        "new",
+      );
+      if (!ans) return;
+      if (ans.trim().toLowerCase() === "new") target = "new";
+      else {
+        const idx = parseInt(ans, 10) - 1;
+        if (Number.isNaN(idx) || idx < 0 || idx >= portfolios.length) {
+          alert("잘못된 입력");
+          return;
+        }
+        target = portfolios[idx].id;
+      }
+    }
+    try {
+      if (target === "new") {
+        const name = window.prompt("새 포트폴리오 이름:");
+        if (!name?.trim()) return;
+        await api.portfolios.create(name.trim(), undefined, [...selected]);
+        alert(`"${name}" 포트폴리오 생성됨 (${selected.size}장)`);
+      } else if (typeof target === "number") {
+        const r = await api.portfolios.addItems(target, [...selected]);
+        alert(`${r.added}장 추가됨`);
+      }
+      clearSelection();
+      refreshPortfolios();
+    } catch (e) {
+      alert(`실패: ${e instanceof Error ? e.message : e}`);
+    }
+  };
+
   return (
     <div className="app">
       <header className="header">
@@ -172,6 +260,9 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
           </button>
           <button className="ghost" onClick={triggerNasScan}>
             NAS 스캔
+          </button>
+          <button className="ghost" onClick={() => setShowPortfolios(true)}>
+            포트폴리오
           </button>
           <button className="ghost" onClick={() => setShowSettings(true)}>
             설정
@@ -274,6 +365,34 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
         </div>
       </div>
 
+      {selected.size > 0 && (
+        <div
+          style={{
+            background: "var(--accent)",
+            color: "white",
+            padding: "10px 20px",
+            display: "flex",
+            gap: 12,
+            alignItems: "center",
+            position: "sticky",
+            top: 50,
+            zIndex: 9,
+          }}
+        >
+          <span style={{ fontWeight: 600 }}>{selected.size}개 선택됨</span>
+          <button className="ghost" onClick={selectAll}>현재 페이지 전체</button>
+          <button className="ghost" onClick={clearSelection}>선택 해제</button>
+          <span style={{ flex: 1 }} />
+          <button className="ghost" onClick={addToPortfolio}>포트폴리오에 추가</button>
+          <button
+            onClick={bulkDelete}
+            style={{ background: "var(--danger)" }}
+          >
+            삭제
+          </button>
+        </div>
+      )}
+
       {loading && photos.length === 0 ? (
         <div className="empty">불러오는 중...</div>
       ) : photos.length === 0 ? (
@@ -281,13 +400,37 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
       ) : (
         <div className="grid">
           {photos.map((p) => (
-            <Card key={p.id} photo={p} onClick={() => setSelected(p.id)} />
+            <Card
+              key={p.id}
+              photo={p}
+              isSelected={selected.has(p.id)}
+              onToggleSelect={() => toggleSelected(p.id)}
+              onClick={() => setOpenPhotoId(p.id)}
+            />
           ))}
         </div>
       )}
 
-      {selected !== null && (
-        <PhotoModal photoId={selected} onClose={() => setSelected(null)} />
+      {openPhotoId !== null && (
+        <PhotoModal
+          photoId={openPhotoId}
+          onClose={() => {
+            setOpenPhotoId(null);
+            void fetchList();
+          }}
+        />
+      )}
+
+      {showPortfolios && (
+        <PortfoliosPage
+          portfolios={portfolios}
+          onClose={() => {
+            setShowPortfolios(false);
+            refreshPortfolios();
+          }}
+          onRefresh={refreshPortfolios}
+          onOpenPhoto={(id) => setOpenPhotoId(id)}
+        />
       )}
 
       {showSettings && (
@@ -302,7 +445,17 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
   );
 }
 
-function Card({ photo, onClick }: { photo: PhotoSummary; onClick: () => void }) {
+function Card({
+  photo,
+  isSelected,
+  onClick,
+  onToggleSelect,
+}: {
+  photo: PhotoSummary;
+  isSelected: boolean;
+  onClick: () => void;
+  onToggleSelect: () => void;
+}) {
   const displayScore = photo.final_score ?? photo.score;
   const userOverride = photo.user_score !== null && photo.user_score !== undefined;
 
@@ -312,8 +465,38 @@ function Card({ photo, onClick }: { photo: PhotoSummary; onClick: () => void }) 
   }, [displayScore]);
 
   return (
-    <div className="card" onClick={onClick}>
+    <div
+      className="card"
+      onClick={onClick}
+      style={isSelected ? { borderColor: "var(--accent)", boxShadow: "0 0 0 2px var(--accent)" } : {}}
+    >
       <img src={photo.thumb_url} alt={`photo ${photo.id}`} className="thumb" loading="lazy" />
+      <div
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleSelect();
+        }}
+        title={isSelected ? "선택 해제" : "선택"}
+        style={{
+          position: "absolute",
+          top: 6,
+          left: 6,
+          width: 22,
+          height: 22,
+          borderRadius: 4,
+          background: isSelected ? "var(--accent)" : "rgba(0, 0, 0, 0.5)",
+          color: "white",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 14,
+          fontWeight: 700,
+          cursor: "pointer",
+          border: "1px solid rgba(255, 255, 255, 0.3)",
+        }}
+      >
+        {isSelected ? "✓" : ""}
+      </div>
       {displayScore !== null && displayScore !== undefined && (
         <div
           className={`score-badge ${scoreClass}`}

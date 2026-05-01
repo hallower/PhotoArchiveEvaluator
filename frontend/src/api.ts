@@ -58,14 +58,61 @@ export interface EvaluationDetail {
   created_at: string;
 }
 
+export interface PhotoPathEntry {
+  id: number;
+  nas_id: string;
+  path: string;
+  size_bytes: number;
+  last_seen_at: string;
+}
+
 export interface PhotoDetail extends PhotoSummary {
   phash: string | null;
   state: string;
   first_seen_at: string;
   last_seen_at: string;
-  paths: { nas_id: string; path: string; last_seen_at: string }[];
+  paths: PhotoPathEntry[];
   evaluations: EvaluationDetail[];
   user_note: string | null;
+}
+
+export interface PortfolioSummary {
+  id: number;
+  name: string;
+  description: string | null;
+  count: number;
+  preview_photo_id: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface PortfolioItem {
+  photo_id: number;
+  taken_at: string | null;
+  camera_model: string | null;
+  added_at: string | null;
+  note: string | null;
+  thumb_url: string;
+}
+
+export interface PortfolioDetail {
+  id: number;
+  name: string;
+  description: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  items: PortfolioItem[];
+}
+
+export interface BackupRecord {
+  id: number;
+  state: string;
+  started_at: string | null;
+  finished_at: string | null;
+  nas_path: string | null;
+  size_bytes: number | null;
+  photo_count: number | null;
+  error: string | null;
 }
 
 export interface QueueCounts {
@@ -136,6 +183,18 @@ export const api = {
       return request<PhotoListResponse>("GET", `/api/photos?${qs.toString()}`);
     },
     detail: (id: number) => request<PhotoDetail>("GET", `/api/photos/${id}`),
+    bulkDelete: (ids: number[], delete_local_files = false) =>
+      request<{ deleted: number; files_deleted: number; files_failed: number }>(
+        "DELETE",
+        "/api/photos",
+        { ids, delete_local_files },
+      ),
+    deletePaths: (photo_id: number, path_ids: number[], delete_local_files = false) =>
+      request<{ deleted: number; files_deleted: number; remaining_paths: number }>(
+        "DELETE",
+        `/api/photos/${photo_id}/paths`,
+        { path_ids, delete_local_files },
+      ),
     setUserScore: (id: number, score: number, note?: string) =>
       request<void>("PUT", `/api/photos/${id}/score`, { score, note: note ?? null }),
     clearUserScore: (id: number) =>
@@ -173,6 +232,30 @@ export const api = {
         { folder },
       ),
     jobs: () => request<ScanJob[]>("GET", "/api/scan/jobs?limit=10"),
+  },
+  portfolios: {
+    list: () => request<PortfolioSummary[]>("GET", "/api/portfolios"),
+    create: (name: string, description?: string, photo_ids?: number[]) =>
+      request<{ id: number }>("POST", "/api/portfolios", {
+        name,
+        description: description ?? null,
+        photo_ids: photo_ids ?? [],
+      }),
+    detail: (id: number) =>
+      request<PortfolioDetail>("GET", `/api/portfolios/${id}`),
+    update: (id: number, patch: { name?: string; description?: string }) =>
+      request<{ id: number }>("PUT", `/api/portfolios/${id}`, patch),
+    remove: (id: number) =>
+      request<void>("DELETE", `/api/portfolios/${id}`),
+    addItems: (id: number, photo_ids: number[]) =>
+      request<{ added: number }>("POST", `/api/portfolios/${id}/items`, { photo_ids }),
+    removeItems: (id: number, photo_ids: number[]) =>
+      request<{ removed: number }>("DELETE", `/api/portfolios/${id}/items`, { photo_ids }),
+  },
+  backup: {
+    trigger: () =>
+      request<{ queued: boolean; id: number }>("POST", "/api/backup"),
+    list: () => request<BackupRecord[]>("GET", "/api/backup"),
   },
   settings: {
     get: () => request<AppSettings>("GET", "/api/settings"),
