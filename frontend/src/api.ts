@@ -122,6 +122,23 @@ export const api = {
       return request<PhotoListResponse>("GET", `/api/photos?${q.toString()}`);
     },
     detail: (id: number) => request<PhotoDetail>("GET", `/api/photos/${id}`),
+    search: (q: string, limit = 50) =>
+      request<{
+        items: {
+          id: number;
+          similarity: number;
+          taken_at: string | null;
+          camera_model: string | null;
+          width: number | null;
+          height: number | null;
+          thumb_url: string;
+        }[];
+        total: number;
+        query: string;
+      }>(
+        "GET",
+        `/api/photos/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+      ),
   },
   scan: {
     local: (folder: string) =>

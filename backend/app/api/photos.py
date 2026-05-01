@@ -11,6 +11,7 @@ import io
 import logging
 from pathlib import Path
 
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -21,7 +22,7 @@ from ..auth.dependencies import require_auth
 from ..config import settings
 from ..nas.session import open_dsm_client
 from ..storage.db import get_session
-from ..storage.models import Evaluation, Photo, PhotoPath
+from ..storage.models import Embedding, Evaluation, Photo, PhotoPath
 
 log = logging.getLogger(__name__)
 
@@ -156,6 +157,68 @@ def list_photos(
         for r in rows
     ]
     return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/search")
+def semantic_search(
+    q: str,
+    limit: int = Query(50, ge=1, le=500),
+    session: Session = Depends(get_session),
+) -> dict:
+    """텍스트 쿼리 → CLIP 텍스트 임베딩 → 저장된 이미지 임베딩과 cosine similarity.
+
+    저장된 임베딩을 메모리에 로드해 단일 matmul로 점수 계산. 137장 ~1ms,
+    1만 장 ~80ms. 100K+에서는 sqlite-vec / Chroma 등 ANN 인덱스 검토.
+    """
+    query = q.strip()
+    if not query:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty query")
+
+    rows = session.execute(
+        select(Embedding.photo_id, Embedding.vector).where(
+            Embedding.model_id == "clip",
+            Embedding.model_version == "vit-l-14",
+        )
+    ).all()
+    if not rows:
+        return {"items": [], "total": 0, "query": query}
+
+    # 텍스트 임베딩 (CLIP — default_embed_model 캐시 1회 로드)
+    from ..evaluator.worker import default_embed_model
+    text_vec = np.frombuffer(default_embed_model().embed_text(query).vector, dtype=np.float32)
+
+    photo_ids = np.array([r[0] for r in rows])
+    matrix = np.stack(
+        [np.frombuffer(r[1], dtype=np.float32) for r in rows]
+    )  # (N, 768)
+    sims = matrix @ text_vec  # (N,)
+    top_idx = np.argsort(-sims)[:limit]
+
+    top_ids = [int(photo_ids[i]) for i in top_idx]
+    top_sims = [float(sims[i]) for i in top_idx]
+
+    # 사진 정보 hydrate (id 순 보존)
+    photos = session.execute(select(Photo).where(Photo.id.in_(top_ids))).scalars().all()
+    by_id = {p.id: p for p in photos}
+
+    items: list[dict] = []
+    for pid, sim in zip(top_ids, top_sims, strict=True):
+        p = by_id.get(pid)
+        if p is None:
+            continue
+        items.append(
+            {
+                "id": p.id,
+                "similarity": sim,
+                "taken_at": p.taken_at.isoformat() if p.taken_at else None,
+                "camera_model": p.camera_model,
+                "width": p.width,
+                "height": p.height,
+                "thumb_url": f"/api/photos/{p.id}/thumb",
+            }
+        )
+
+    return {"items": items, "total": len(items), "query": query}
 
 
 @router.get("/{photo_id}")

@@ -22,6 +22,8 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
   const [selected, setSelected] = useState<number | null>(null);
   const [queue, setQueue] = useState<QueueCounts | null>(null);
   const [showPrompt, setShowPrompt] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchActive, setSearchActive] = useState(false);
 
   const fetchList = useCallback(async () => {
     setLoading(true);
@@ -29,10 +31,53 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
       const res = await api.photos.list({ min_score: minScore, sort, limit: 200 });
       setPhotos(res.items);
       setTotal(res.total);
+      setSearchActive(false);
     } finally {
       setLoading(false);
     }
   }, [minScore, sort]);
+
+  const runSearch = useCallback(async () => {
+    const q = searchQuery.trim();
+    if (!q) {
+      setSearchActive(false);
+      void fetchList();
+      return;
+    }
+    setLoading(true);
+    setSearchActive(true);
+    try {
+      const res = await api.photos.search(q, 100);
+      // search 응답은 PhotoSummary 호환 — 부족 필드 보강
+      const items: PhotoSummary[] = res.items.map((it) => ({
+        id: it.id,
+        sha256: "",
+        taken_at: it.taken_at,
+        camera_make: null,
+        camera_model: it.camera_model,
+        lens_model: null,
+        iso: null,
+        aperture: null,
+        shutter: null,
+        focal_mm: null,
+        gps_lat: null,
+        gps_lon: null,
+        width: it.width,
+        height: it.height,
+        size_bytes: 0,
+        score: null,
+        raw_score: null,
+        eval_model_id: null,
+        prompt_score: it.similarity,
+        prompt_raw: it.similarity,
+        thumb_url: it.thumb_url,
+      }));
+      setPhotos(items);
+      setTotal(res.total);
+    } finally {
+      setLoading(false);
+    }
+  }, [searchQuery, fetchList]);
 
   const fetchQueue = useCallback(async () => {
     try {
@@ -126,11 +171,25 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
         </div>
       </header>
       <div className="toolbar">
+        <label style={{ flex: "1 1 280px", minWidth: 240 }}>
+          시맨틱 검색 (CLIP)
+          <input
+            type="search"
+            placeholder='예: "석양 풍경", "portrait with bokeh"'
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void runSearch();
+            }}
+            style={{ width: "100%" }}
+          />
+        </label>
         <label>
           최소 점수
           <select
             value={String(minScore)}
             onChange={(e) => setMinScore(parseFloat(e.target.value))}
+            disabled={searchActive}
           >
             <option value="0">전체</option>
             <option value="3">3 이상</option>
@@ -142,7 +201,11 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
         </label>
         <label>
           정렬
-          <select value={sort} onChange={(e) => setSort(e.target.value)}>
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value)}
+            disabled={searchActive}
+          >
             {SORT_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
@@ -150,6 +213,17 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
             ))}
           </select>
         </label>
+        {searchActive && (
+          <button
+            className="ghost"
+            onClick={() => {
+              setSearchQuery("");
+              void fetchList();
+            }}
+          >
+            검색 종료
+          </button>
+        )}
         <div className="stats">
           <div>
             결과: <span className="stat-num">{total}</span>장
