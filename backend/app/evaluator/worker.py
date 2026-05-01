@@ -134,12 +134,26 @@ class EvaluatorWorker:
         if job is None:
             return False
 
-        # 잠금 (단일 워커 전제 — 다중 워커 시 SELECT FOR UPDATE / 비교-스왑으로 대체)
-        job.state = "in_progress"
-        job.started_at = _utc_now()
-        job.attempts += 1
+        # Race-safe 청구: 다른 워커가 동시에 같은 잡을 가져갔을 수 있으므로
+        # UPDATE ... WHERE state='pending'으로 비교-스왑.
+        result = session.execute(
+            update(EvalJob)
+            .where(EvalJob.id == job.id, EvalJob.state == "pending")
+            .values(
+                state="in_progress",
+                started_at=_utc_now(),
+                attempts=EvalJob.attempts + 1,
+            )
+        )
         session.commit()
+        if (result.rowcount or 0) == 0:
+            # 다른 워커가 이미 가져감
+            return True  # 다음 반복에서 다른 잡 시도
 
+        # 다시 조회해 최신 상태(updated attempts) 반영
+        job = session.get(EvalJob, job.id)
+        if job is None:
+            return True
         photo_id = job.photo_id
 
         try:
