@@ -26,7 +26,18 @@ export interface PhotoSummary {
   eval_model_id: string | null;
   prompt_score: number | null;
   prompt_raw: number | null;
+  user_score: number | null;
+  final_score: number | null;
   thumb_url: string;
+}
+
+export interface AppSettings {
+  eval_prompt: string;
+  default_eval_prompt: string;
+  library_min_score: number;
+  default_library_min_score: number;
+  scan_local_paths: string[];
+  scan_dsm_paths: string[];
 }
 
 export interface PhotoListResponse {
@@ -54,6 +65,7 @@ export interface PhotoDetail extends PhotoSummary {
   last_seen_at: string;
   paths: { nas_id: string; path: string; last_seen_at: string }[];
   evaluations: EvaluationDetail[];
+  user_note: string | null;
 }
 
 export interface QueueCounts {
@@ -111,17 +123,28 @@ export const api = {
       min_score?: number | null;
       sort?: string;
       camera?: string;
+      q?: string;
     }) => {
-      const q = new URLSearchParams();
-      if (params.limit !== undefined) q.set("limit", String(params.limit));
-      if (params.offset !== undefined) q.set("offset", String(params.offset));
+      const qs = new URLSearchParams();
+      if (params.limit !== undefined) qs.set("limit", String(params.limit));
+      if (params.offset !== undefined) qs.set("offset", String(params.offset));
       if (params.min_score !== undefined && params.min_score !== null)
-        q.set("min_score", String(params.min_score));
-      if (params.sort) q.set("sort", params.sort);
-      if (params.camera) q.set("camera", params.camera);
-      return request<PhotoListResponse>("GET", `/api/photos?${q.toString()}`);
+        qs.set("min_score", String(params.min_score));
+      if (params.sort) qs.set("sort", params.sort);
+      if (params.camera) qs.set("camera", params.camera);
+      if (params.q) qs.set("q", params.q);
+      return request<PhotoListResponse>("GET", `/api/photos?${qs.toString()}`);
     },
     detail: (id: number) => request<PhotoDetail>("GET", `/api/photos/${id}`),
+    setUserScore: (id: number, score: number, note?: string) =>
+      request<void>("PUT", `/api/photos/${id}/score`, { score, note: note ?? null }),
+    clearUserScore: (id: number) =>
+      request<void>("DELETE", `/api/photos/${id}/score`),
+    similar: (id: number, limit = 20) =>
+      request<{
+        items: { id: number; hamming: number; taken_at: string | null; camera_model: string | null; thumb_url: string }[];
+        total: number;
+      }>("GET", `/api/photos/${id}/similar?limit=${limit}`),
     search: (q: string, limit = 50) =>
       request<{
         items: {
@@ -150,6 +173,25 @@ export const api = {
         { folder },
       ),
     jobs: () => request<ScanJob[]>("GET", "/api/scan/jobs?limit=10"),
+  },
+  settings: {
+    get: () => request<AppSettings>("GET", "/api/settings"),
+    put: (patch: Partial<{
+      eval_prompt: string;
+      library_min_score: number;
+      scan_local_paths: string[];
+      scan_dsm_paths: string[];
+    }>) =>
+      request<{ ok: boolean; prompt_rescored: boolean }>(
+        "PUT",
+        "/api/settings",
+        patch,
+      ),
+    scanSaved: () =>
+      request<{ queued: boolean; started: { local: number; dsm: number } }>(
+        "POST",
+        "/api/settings/scan-saved",
+      ),
   },
   nas: {
     status: () =>

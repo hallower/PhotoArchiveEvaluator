@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type PhotoSummary, type QueueCounts } from "../api";
 import { PhotoModal } from "./PhotoModal";
-import { PromptDialog } from "./PromptDialog";
+import { SettingsPage } from "./SettingsPage";
 
 const SORT_OPTIONS = [
   { value: "-taken_at", label: "촬영일 ↓" },
   { value: "taken_at", label: "촬영일 ↑" },
+  { value: "-final", label: "점수 ↓ (사용자 우선)" },
   { value: "-score", label: "미학 점수 ↓" },
   { value: "score", label: "미학 점수 ↑" },
   { value: "-prompt", label: "prompt 점수 ↓" },
@@ -21,21 +22,35 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
   const [queue, setQueue] = useState<QueueCounts | null>(null);
-  const [showPrompt, setShowPrompt] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchActive, setSearchActive] = useState(false);
+  const [keyword, setKeyword] = useState("");
 
   const fetchList = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.photos.list({ min_score: minScore, sort, limit: 200 });
+      const res = await api.photos.list({
+        min_score: minScore,
+        sort,
+        limit: 200,
+        q: keyword.trim() || undefined,
+      });
       setPhotos(res.items);
       setTotal(res.total);
       setSearchActive(false);
     } finally {
       setLoading(false);
     }
-  }, [minScore, sort]);
+  }, [minScore, sort, keyword]);
+
+  // 첫 진입 시 settings에서 임계값 로드
+  useEffect(() => {
+    void api.settings
+      .get()
+      .then((s) => setMinScore(s.library_min_score))
+      .catch(() => {});
+  }, []);
 
   const runSearch = useCallback(async () => {
     const q = searchQuery.trim();
@@ -70,6 +85,8 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
         eval_model_id: null,
         prompt_score: it.similarity,
         prompt_raw: it.similarity,
+        user_score: null,
+        final_score: it.similarity,
         thumb_url: it.thumb_url,
       }));
       setPhotos(items);
@@ -156,8 +173,8 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
           <button className="ghost" onClick={triggerNasScan}>
             NAS 스캔
           </button>
-          <button className="ghost" onClick={() => setShowPrompt(true)}>
-            평가 prompt
+          <button className="ghost" onClick={() => setShowSettings(true)}>
+            설정
           </button>
           <button className="ghost" onClick={triggerEval}>
             평가 처리
@@ -171,16 +188,30 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
         </div>
       </header>
       <div className="toolbar">
-        <label style={{ flex: "1 1 280px", minWidth: 240 }}>
+        <label style={{ flex: "1 1 240px", minWidth: 200 }}>
           시맨틱 검색 (CLIP)
           <input
             type="search"
-            placeholder='예: "석양 풍경", "portrait with bokeh"'
+            placeholder='예: "portrait with bokeh"'
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") void runSearch();
             }}
+            style={{ width: "100%" }}
+          />
+        </label>
+        <label style={{ flex: "1 1 200px", minWidth: 160 }}>
+          키워드 (카메라/렌즈/경로)
+          <input
+            type="search"
+            placeholder='예: "X-E4", "2018"'
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void fetchList();
+            }}
+            disabled={searchActive}
             style={{ width: "100%" }}
           />
         </label>
@@ -259,11 +290,10 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
         <PhotoModal photoId={selected} onClose={() => setSelected(null)} />
       )}
 
-      {showPrompt && (
-        <PromptDialog
-          onClose={() => setShowPrompt(false)}
-          onSaved={() => {
-            setShowPrompt(false);
+      {showSettings && (
+        <SettingsPage
+          onClose={() => {
+            setShowSettings(false);
             void fetchList();
           }}
         />
@@ -273,16 +303,25 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
 }
 
 function Card({ photo, onClick }: { photo: PhotoSummary; onClick: () => void }) {
+  const displayScore = photo.final_score ?? photo.score;
+  const userOverride = photo.user_score !== null && photo.user_score !== undefined;
+
   const scoreClass = useMemo(() => {
-    if (photo.score === null) return "score-1";
-    return `score-${Math.max(1, Math.min(5, Math.round(photo.score)))}`;
-  }, [photo.score]);
+    if (displayScore === null || displayScore === undefined) return "score-1";
+    return `score-${Math.max(1, Math.min(5, Math.round(displayScore)))}`;
+  }, [displayScore]);
 
   return (
     <div className="card" onClick={onClick}>
       <img src={photo.thumb_url} alt={`photo ${photo.id}`} className="thumb" loading="lazy" />
-      {photo.score !== null && (
-        <div className={`score-badge ${scoreClass}`}>{photo.score.toFixed(1)}</div>
+      {displayScore !== null && displayScore !== undefined && (
+        <div
+          className={`score-badge ${scoreClass}`}
+          title={userOverride ? "사용자 점수" : "AI 점수"}
+        >
+          {userOverride ? "★ " : ""}
+          {displayScore.toFixed(1)}
+        </div>
       )}
       <div className="info">
         <span>{photo.camera_model ?? "-"}</span>

@@ -162,6 +162,19 @@ class EvalJob(Base):
     finished_at: Mapped[datetime | None] = mapped_column(default=None)
 
 
+class UserScore(Base):
+    """사용자 점수 오버라이드 (SCHEMA §2.9). photo 당 1행."""
+
+    __tablename__ = "user_scores"
+
+    photo_id: Mapped[int] = mapped_column(
+        ForeignKey("photos.id", ondelete="CASCADE"), primary_key=True
+    )
+    score: Mapped[float]  # 1.0 - 5.0
+    note: Mapped[str | None] = mapped_column(Text, default=None)
+    updated_at: Mapped[datetime] = mapped_column(default=_utc_now, onupdate=_utc_now)
+
+
 class Setting(Base):
     """런타임 설정. config.py와 분리 — 런타임 변경 가능 항목만 여기에 둔다."""
 

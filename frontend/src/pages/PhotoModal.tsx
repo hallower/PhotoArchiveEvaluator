@@ -9,9 +9,18 @@ export function PhotoModal({
   onClose: () => void;
 }) {
   const [detail, setDetail] = useState<PhotoDetail | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [similar, setSimilar] = useState<
+    { id: number; hamming: number; thumb_url: string }[] | null
+  >(null);
+
+  const load = () =>
+    api.photos.detail(photoId).then(setDetail).catch(() => setDetail(null));
 
   useEffect(() => {
-    void api.photos.detail(photoId).then(setDetail);
+    void load();
+    setSimilar(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [photoId]);
 
   useEffect(() => {
@@ -21,6 +30,40 @@ export function PhotoModal({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  const setUserScore = async (score: number | null) => {
+    setBusy(true);
+    try {
+      if (score === null) {
+        await api.photos.clearUserScore(photoId);
+      } else {
+        await api.photos.setUserScore(photoId, score);
+      }
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const findSimilar = async () => {
+    setBusy(true);
+    try {
+      const r = await api.photos.similar(photoId, 12);
+      setSimilar(
+        r.items.map((it) => ({
+          id: it.id,
+          hamming: it.hamming,
+          thumb_url: it.thumb_url,
+        })),
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const aest = detail?.evaluations.find((e) => e.model_id !== "clip-prompt");
+  const promptEval = detail?.evaluations.find((e) => e.model_id === "clip-prompt");
+  const userScore = detail?.user_score ?? null;
 
   return (
     <div className="modal-bg" onClick={onClose}>
@@ -39,21 +82,21 @@ export function PhotoModal({
               <dl>
                 <dt>미학 점수</dt>
                 <dd>
-                  {detail.evaluations.find((e) => e.model_id !== "clip-prompt")?.ai_score?.toFixed(2) ??
-                    "-"}{" "}
-                  (raw{" "}
-                  {detail.evaluations.find((e) => e.model_id !== "clip-prompt")?.raw_score?.toFixed(2) ??
-                    "-"}
-                  )
+                  {aest?.ai_score?.toFixed(2) ?? "-"} (raw{" "}
+                  {aest?.raw_score?.toFixed(2) ?? "-"})
                 </dd>
                 <dt>prompt 점수</dt>
                 <dd>
-                  {detail.evaluations.find((e) => e.model_id === "clip-prompt")?.ai_score?.toFixed(2) ??
-                    "-"}{" "}
-                  (sim{" "}
-                  {detail.evaluations.find((e) => e.model_id === "clip-prompt")?.raw_score?.toFixed(3) ??
-                    "-"}
-                  )
+                  {promptEval?.ai_score?.toFixed(2) ?? "-"} (sim{" "}
+                  {promptEval?.raw_score?.toFixed(3) ?? "-"})
+                </dd>
+                <dt>사용자 점수</dt>
+                <dd>
+                  <UserScoreEditor
+                    current={userScore}
+                    onSet={setUserScore}
+                    disabled={busy}
+                  />
                 </dd>
                 <dt>촬영일</dt>
                 <dd>{detail.taken_at ?? "-"}</dd>
@@ -85,9 +128,62 @@ export function PhotoModal({
                 <dd style={{ fontSize: 10, color: "var(--text-dim)" }}>
                   {detail.sha256.slice(0, 12)}…
                 </dd>
+                <dt>pHash</dt>
+                <dd style={{ fontSize: 10, color: "var(--text-dim)" }}>
+                  {detail.phash ?? "-"}
+                </dd>
                 <dt>경로</dt>
                 <dd style={{ fontSize: 10 }}>{detail.paths[0]?.path ?? "-"}</dd>
               </dl>
+
+              <button
+                className="ghost"
+                onClick={findSimilar}
+                disabled={busy || !detail.phash}
+                style={{ marginTop: 14 }}
+                title={!detail.phash ? "phash가 없는 사진" : ""}
+              >
+                비슷한 사진 찾기 (pHash)
+              </button>
+
+              {similar && (
+                <div style={{ marginTop: 12 }}>
+                  <h4 style={{ margin: "6px 0", fontSize: 12 }}>
+                    pHash 유사 ({similar.length})
+                  </h4>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(3, 1fr)",
+                      gap: 4,
+                    }}
+                  >
+                    {similar.map((s) => (
+                      <div key={s.id} style={{ position: "relative" }}>
+                        <img
+                          src={s.thumb_url}
+                          alt={`#${s.id}`}
+                          style={{ width: "100%", aspectRatio: 1, objectFit: "cover", borderRadius: 4 }}
+                        />
+                        <span
+                          style={{
+                            position: "absolute",
+                            bottom: 2,
+                            right: 2,
+                            background: "rgba(0,0,0,0.7)",
+                            color: "white",
+                            fontSize: 10,
+                            padding: "1px 4px",
+                            borderRadius: 3,
+                          }}
+                        >
+                          {s.hamming}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -95,6 +191,54 @@ export function PhotoModal({
           ×
         </div>
       </div>
+    </div>
+  );
+}
+
+function UserScoreEditor({
+  current,
+  onSet,
+  disabled,
+}: {
+  current: number | null;
+  onSet: (score: number | null) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+      {[1, 2, 3, 4, 5].map((v) => (
+        <button
+          key={v}
+          type="button"
+          onClick={() => onSet(v)}
+          disabled={disabled}
+          style={{
+            padding: "2px 8px",
+            fontSize: 11,
+            background: current === v ? "var(--accent)" : "var(--panel)",
+            color: current === v ? "white" : "var(--text)",
+            border: "1px solid var(--border)",
+          }}
+        >
+          {v}
+        </button>
+      ))}
+      {current !== null && (
+        <button
+          type="button"
+          onClick={() => onSet(null)}
+          disabled={disabled}
+          style={{
+            padding: "2px 8px",
+            fontSize: 11,
+            background: "var(--panel)",
+            color: "var(--text-dim)",
+            border: "1px solid var(--border)",
+          }}
+        >
+          제거
+        </button>
+      )}
     </div>
   );
 }

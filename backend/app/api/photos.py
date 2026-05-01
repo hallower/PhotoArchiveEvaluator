@@ -18,11 +18,13 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy import asc, desc, func, select
 from sqlalchemy.orm import Session, aliased
 
+from pydantic import BaseModel, Field
+
 from ..auth.dependencies import require_auth
 from ..config import settings
 from ..nas.session import open_dsm_client
 from ..storage.db import get_session
-from ..storage.models import Embedding, Evaluation, Photo, PhotoPath
+from ..storage.models import Embedding, Evaluation, Photo, PhotoPath, UserScore
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +42,8 @@ _SORT_OPTIONS = {
     "taken_at",
     "-score",
     "score",
+    "-final",
+    "final",
     "-prompt",
     "prompt",
     "-id",
@@ -55,6 +59,7 @@ def list_photos(
     min_score: float | None = Query(4.0),
     max_score: float | None = Query(None),
     camera: str | None = None,
+    q: str | None = Query(None, description="키워드: camera/lens/path 부분 일치"),
     sort: str = "-taken_at",
 ) -> dict:
     if sort not in _SORT_OPTIONS:
@@ -78,6 +83,8 @@ def list_photos(
     )
     pe = aliased(Evaluation)
 
+    final_score = func.coalesce(UserScore.score, e.ai_score)
+
     base = (
         select(
             Photo.id,
@@ -100,26 +107,41 @@ def list_photos(
             e.model_id.label("eval_model_id"),
             pe.ai_score.label("prompt_score"),
             pe.raw_score.label("prompt_raw"),
+            UserScore.score.label("user_score"),
+            final_score.label("final_score"),
         )
         .outerjoin(aest_sub, aest_sub.c.photo_id == Photo.id)
         .outerjoin(e, e.id == aest_sub.c.eval_id)
         .outerjoin(prompt_sub, prompt_sub.c.photo_id == Photo.id)
         .outerjoin(pe, pe.id == prompt_sub.c.eval_id)
+        .outerjoin(UserScore, UserScore.photo_id == Photo.id)
         .where(Photo.state == "active")
     )
 
     if min_score is not None:
-        base = base.where(e.ai_score >= min_score)
+        # 사용자 점수가 있으면 그것을 임계값 비교에 사용
+        base = base.where(final_score >= min_score)
     if max_score is not None:
-        base = base.where(e.ai_score <= max_score)
+        base = base.where(final_score <= max_score)
     if camera:
         base = base.where(Photo.camera_model == camera)
+    if q:
+        # 키워드: camera_model / lens_model / 사진 경로(photo_paths) 부분 일치 (OR)
+        like = f"%{q}%"
+        path_subq = select(PhotoPath.photo_id).where(PhotoPath.path.like(like))
+        base = base.where(
+            (Photo.camera_model.like(like))
+            | (Photo.lens_model.like(like))
+            | (Photo.id.in_(path_subq))
+        )
 
     sort_col = {
         "-taken_at": desc(Photo.taken_at),
         "taken_at": asc(Photo.taken_at),
         "-score": desc(e.ai_score),
         "score": asc(e.ai_score),
+        "-final": desc(final_score),
+        "final": asc(final_score),
         "-prompt": desc(pe.ai_score),
         "prompt": asc(pe.ai_score),
         "-id": desc(Photo.id),
@@ -152,6 +174,8 @@ def list_photos(
             "eval_model_id": r.eval_model_id,
             "prompt_score": r.prompt_score,
             "prompt_raw": r.prompt_raw,
+            "user_score": r.user_score,
+            "final_score": r.final_score,
             "thumb_url": f"/api/photos/{r.id}/thumb",
         }
         for r in rows
@@ -243,6 +267,10 @@ def get_photo(photo_id: int, session: Session = Depends(get_session)) -> dict:
         ).all()
     )
 
+    user_score = session.execute(
+        select(UserScore).where(UserScore.photo_id == photo_id)
+    ).scalar_one_or_none()
+
     return {
         "id": photo.id,
         "sha256": photo.sha256,
@@ -281,8 +309,84 @@ def get_photo(photo_id: int, session: Session = Depends(get_session)) -> dict:
             }
             for ev in evals
         ],
+        "user_score": user_score.score if user_score else None,
+        "user_note": user_score.note if user_score else None,
         "thumb_url": f"/api/photos/{photo.id}/thumb",
     }
+
+
+class _UserScoreIn(BaseModel):
+    score: float = Field(ge=1.0, le=5.0)
+    note: str | None = None
+
+
+@router.put("/{photo_id}/score", status_code=status.HTTP_204_NO_CONTENT)
+def set_user_score(
+    photo_id: int,
+    body: _UserScoreIn,
+    session: Session = Depends(get_session),
+) -> None:
+    photo = session.get(Photo, photo_id)
+    if photo is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "photo not found")
+    existing = session.execute(
+        select(UserScore).where(UserScore.photo_id == photo_id)
+    ).scalar_one_or_none()
+    if existing:
+        existing.score = body.score
+        existing.note = body.note
+    else:
+        session.add(UserScore(photo_id=photo_id, score=body.score, note=body.note))
+    session.commit()
+
+
+@router.delete("/{photo_id}/score", status_code=status.HTTP_204_NO_CONTENT)
+def clear_user_score(photo_id: int, session: Session = Depends(get_session)) -> None:
+    session.execute(
+        UserScore.__table__.delete().where(UserScore.photo_id == photo_id)
+    )
+    session.commit()
+
+
+@router.get("/{photo_id}/similar")
+def find_similar(
+    photo_id: int,
+    limit: int = Query(20, ge=1, le=100),
+    max_distance: int = Query(12, ge=1, le=32, description="Hamming 거리 상한 (0=동일, 64=완전 다름)"),
+    session: Session = Depends(get_session),
+) -> dict:
+    """pHash 기반 유사 사진 (Hamming distance 오름차순)."""
+    target = session.get(Photo, photo_id)
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "photo not found")
+    if not target.phash:
+        return {"items": [], "total": 0, "note": "no phash for this photo"}
+
+    target_int = int(target.phash, 16)
+    rows = session.execute(
+        select(Photo.id, Photo.phash, Photo.taken_at, Photo.camera_model)
+        .where(Photo.phash.is_not(None), Photo.id != photo_id)
+    ).all()
+    scored: list[tuple[int, int, str | None, str | None]] = []
+    for pid, phash, taken_at, camera in rows:
+        try:
+            dist = bin(int(phash, 16) ^ target_int).count("1")
+        except (TypeError, ValueError):
+            continue
+        if dist <= max_distance:
+            scored.append((pid, dist, taken_at, camera))
+    scored.sort(key=lambda x: x[1])
+    items = [
+        {
+            "id": pid,
+            "hamming": dist,
+            "taken_at": ta.isoformat() if ta else None,
+            "camera_model": cam,
+            "thumb_url": f"/api/photos/{pid}/thumb",
+        }
+        for pid, dist, ta, cam in scored[:limit]
+    ]
+    return {"items": items, "total": len(items), "max_distance": max_distance}
 
 
 @router.get("/{photo_id}/thumb")

@@ -46,6 +46,20 @@ def parse_bytes(data: bytes) -> ImageMeta:
     return _parse_image(io.BytesIO(data))
 
 
+def parse_phash_bytes(data: bytes) -> str | None:
+    """JPEG 바이트의 perceptual hash (16-char hex). 실패 시 None."""
+    import io as _io
+
+    import imagehash  # type: ignore[import-untyped]
+
+    try:
+        with Image.open(_io.BytesIO(data)) as img:
+            return str(imagehash.phash(img))  # 16-char hex (64 bits)
+    except (UnidentifiedImageError, OSError) as exc:
+        log.warning("phash failed: %s", exc)
+        return None
+
+
 def _parse_image(source) -> ImageMeta:
     meta = ImageMeta()
     try:

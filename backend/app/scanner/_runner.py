@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..storage.models import EvalJob, Evaluation, Photo, PhotoPath, ScanJob
-from .exif import parse_bytes
+from .exif import parse_bytes, parse_phash_bytes
 from .walker import FileEntry, Walker
 
 log = logging.getLogger(__name__)
@@ -107,8 +107,10 @@ def _process_file(session: Session, walker: Walker, entry: FileEntry) -> str:
     is_new_photo = photo is None
     if is_new_photo:
         meta = parse_bytes(content)
+        phash = parse_phash_bytes(content)
         photo = Photo(
             sha256=sha,
+            phash=phash,
             size_bytes=entry.size_bytes,
             mime_type="image/jpeg",
             width=meta.width,
