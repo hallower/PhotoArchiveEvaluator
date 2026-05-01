@@ -37,10 +37,23 @@ export function PhotoModal({
             <>
               <h3>사진 정보</h3>
               <dl>
-                <dt>점수</dt>
+                <dt>미학 점수</dt>
                 <dd>
-                  {detail.evaluations[0]?.ai_score?.toFixed(2) ?? "-"} (raw{" "}
-                  {detail.evaluations[0]?.raw_score?.toFixed(2) ?? "-"})
+                  {detail.evaluations.find((e) => e.model_id !== "clip-prompt")?.ai_score?.toFixed(2) ??
+                    "-"}{" "}
+                  (raw{" "}
+                  {detail.evaluations.find((e) => e.model_id !== "clip-prompt")?.raw_score?.toFixed(2) ??
+                    "-"}
+                  )
+                </dd>
+                <dt>prompt 점수</dt>
+                <dd>
+                  {detail.evaluations.find((e) => e.model_id === "clip-prompt")?.ai_score?.toFixed(2) ??
+                    "-"}{" "}
+                  (sim{" "}
+                  {detail.evaluations.find((e) => e.model_id === "clip-prompt")?.raw_score?.toFixed(3) ??
+                    "-"}
+                  )
                 </dd>
                 <dt>촬영일</dt>
                 <dd>{detail.taken_at ?? "-"}</dd>

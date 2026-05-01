@@ -14,7 +14,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..auth.dependencies import require_auth
+from ..evaluator.rescore import rescore_prompt
 from ..evaluator.worker import EvaluatorWorker
+from ..settings_store import (
+    DEFAULT_EVAL_PROMPT,
+    EVAL_PROMPT,
+    get_eval_prompt,
+    set_value,
+)
 from ..storage.db import SessionLocal, get_session
 from ..storage.models import EvalJob
 
@@ -27,6 +34,10 @@ router = APIRouter(
 
 class _ProcessRequest(BaseModel):
     max_jobs: int | None = None
+
+
+class _PromptUpdate(BaseModel):
+    prompt: str
 
 
 @router.get("/queue")
@@ -53,3 +64,33 @@ def trigger_process(req: _ProcessRequest) -> dict:
     )
     thread.start()
     return {"queued": True, "max_jobs": req.max_jobs}
+
+
+@router.get("/prompt")
+def get_prompt(session: Session = Depends(get_session)) -> dict:
+    return {
+        "prompt": get_eval_prompt(session),
+        "default": DEFAULT_EVAL_PROMPT,
+    }
+
+
+@router.put("/prompt")
+def put_prompt(body: _PromptUpdate, session: Session = Depends(get_session)) -> dict:
+    text = body.prompt.strip()
+    if not text:
+        text = DEFAULT_EVAL_PROMPT
+    set_value(session, EVAL_PROMPT, text)
+    return {"prompt": text}
+
+
+@router.post("/rescore-prompt", status_code=status.HTTP_202_ACCEPTED)
+def trigger_rescore_prompt() -> dict:
+    """저장된 임베딩만으로 prompt 점수를 재계산 (CLIP forward 불필요)."""
+    thread = threading.Thread(
+        target=rescore_prompt,
+        args=(SessionLocal,),
+        daemon=True,
+        name="prompt-rescore",
+    )
+    thread.start()
+    return {"queued": True}

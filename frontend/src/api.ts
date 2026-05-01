@@ -24,6 +24,8 @@ export interface PhotoSummary {
   score: number | null;
   raw_score: number | null;
   eval_model_id: string | null;
+  prompt_score: number | null;
+  prompt_raw: number | null;
   thumb_url: string;
 }
 
@@ -151,5 +153,11 @@ export const api = {
     queue: () => request<QueueCounts>("GET", "/api/eval/queue"),
     process: (max_jobs: number | null = null) =>
       request<{ queued: boolean }>("POST", "/api/eval/process", { max_jobs }),
+    getPrompt: () =>
+      request<{ prompt: string; default: string }>("GET", "/api/eval/prompt"),
+    putPrompt: (prompt: string) =>
+      request<{ prompt: string }>("PUT", "/api/eval/prompt", { prompt }),
+    rescorePrompt: () =>
+      request<{ queued: boolean }>("POST", "/api/eval/rescore-prompt"),
   },
 };

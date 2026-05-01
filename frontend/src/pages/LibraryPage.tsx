@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type PhotoSummary, type QueueCounts } from "../api";
 import { PhotoModal } from "./PhotoModal";
+import { PromptDialog } from "./PromptDialog";
 
 const SORT_OPTIONS = [
   { value: "-taken_at", label: "촬영일 ↓" },
   { value: "taken_at", label: "촬영일 ↑" },
-  { value: "-score", label: "점수 ↓" },
-  { value: "score", label: "점수 ↑" },
+  { value: "-score", label: "미학 점수 ↓" },
+  { value: "score", label: "미학 점수 ↑" },
+  { value: "-prompt", label: "prompt 점수 ↓" },
+  { value: "prompt", label: "prompt 점수 ↑" },
   { value: "-id", label: "최근 등록" },
 ];
 
@@ -18,6 +21,7 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
   const [queue, setQueue] = useState<QueueCounts | null>(null);
+  const [showPrompt, setShowPrompt] = useState(false);
 
   const fetchList = useCallback(async () => {
     setLoading(true);
@@ -107,6 +111,9 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
           <button className="ghost" onClick={triggerNasScan}>
             NAS 스캔
           </button>
+          <button className="ghost" onClick={() => setShowPrompt(true)}>
+            평가 prompt
+          </button>
           <button className="ghost" onClick={triggerEval}>
             평가 처리
           </button>
@@ -176,6 +183,16 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
 
       {selected !== null && (
         <PhotoModal photoId={selected} onClose={() => setSelected(null)} />
+      )}
+
+      {showPrompt && (
+        <PromptDialog
+          onClose={() => setShowPrompt(false)}
+          onSaved={() => {
+            setShowPrompt(false);
+            void fetchList();
+          }}
+        />
       )}
     </div>
   );

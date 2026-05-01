@@ -34,7 +34,16 @@ router = APIRouter(
 THUMB_SIZES = {200, 400, 800}
 DEFAULT_THUMB_SIZE = 400
 
-_SORT_OPTIONS = {"-taken_at", "taken_at", "-score", "score", "-id", "id"}
+_SORT_OPTIONS = {
+    "-taken_at",
+    "taken_at",
+    "-score",
+    "score",
+    "-prompt",
+    "prompt",
+    "-id",
+    "id",
+}
 
 
 @router.get("")
@@ -50,12 +59,23 @@ def list_photos(
     if sort not in _SORT_OPTIONS:
         sort = "-taken_at"
 
-    sub = (
+    # 미학(aesthetic) 점수: model_id != 'clip-prompt' 의 최신 1행
+    aest_sub = (
         select(Evaluation.photo_id, func.max(Evaluation.id).label("eval_id"))
+        .where(Evaluation.model_id != "clip-prompt")
         .group_by(Evaluation.photo_id)
         .subquery()
     )
     e = aliased(Evaluation)
+
+    # prompt 점수: model_id == 'clip-prompt' 의 최신 1행
+    prompt_sub = (
+        select(Evaluation.photo_id, func.max(Evaluation.id).label("eval_id"))
+        .where(Evaluation.model_id == "clip-prompt")
+        .group_by(Evaluation.photo_id)
+        .subquery()
+    )
+    pe = aliased(Evaluation)
 
     base = (
         select(
@@ -77,9 +97,13 @@ def list_photos(
             e.ai_score,
             e.raw_score,
             e.model_id.label("eval_model_id"),
+            pe.ai_score.label("prompt_score"),
+            pe.raw_score.label("prompt_raw"),
         )
-        .outerjoin(sub, sub.c.photo_id == Photo.id)
-        .outerjoin(e, e.id == sub.c.eval_id)
+        .outerjoin(aest_sub, aest_sub.c.photo_id == Photo.id)
+        .outerjoin(e, e.id == aest_sub.c.eval_id)
+        .outerjoin(prompt_sub, prompt_sub.c.photo_id == Photo.id)
+        .outerjoin(pe, pe.id == prompt_sub.c.eval_id)
         .where(Photo.state == "active")
     )
 
@@ -95,6 +119,8 @@ def list_photos(
         "taken_at": asc(Photo.taken_at),
         "-score": desc(e.ai_score),
         "score": asc(e.ai_score),
+        "-prompt": desc(pe.ai_score),
+        "prompt": asc(pe.ai_score),
         "-id": desc(Photo.id),
         "id": asc(Photo.id),
     }[sort]
@@ -123,6 +149,8 @@ def list_photos(
             "score": r.ai_score,
             "raw_score": r.raw_score,
             "eval_model_id": r.eval_model_id,
+            "prompt_score": r.prompt_score,
+            "prompt_raw": r.prompt_raw,
             "thumb_url": f"/api/photos/{r.id}/thumb",
         }
         for r in rows

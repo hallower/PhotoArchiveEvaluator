@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, ForeignKey, Index, Text, UniqueConstraint
+from sqlalchemy import BigInteger, ForeignKey, Index, LargeBinary, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -101,6 +101,30 @@ class Evaluation(Base):
     created_at: Mapped[datetime] = mapped_column(default=_utc_now)
 
     photo: Mapped[Photo] = relationship(back_populates="evaluations")
+
+
+class Embedding(Base):
+    """사진 임베딩 벡터.
+
+    동일 (photo_id, model_id, model_version)는 1행만 활성. 모델 교체 시 재계산.
+    Phase 1에서는 CLIP image embedding을 저장. text embedding은 prompt 변경 시
+    런타임에서만 계산하므로 저장 안 함.
+    """
+
+    __tablename__ = "embeddings"
+    __table_args__ = (
+        UniqueConstraint(
+            "photo_id", "model_id", "model_version", name="uq_emb_photo_model"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    photo_id: Mapped[int] = mapped_column(ForeignKey("photos.id", ondelete="CASCADE"), index=True)
+    model_id: Mapped[str]
+    model_version: Mapped[str]
+    dim: Mapped[int]
+    vector: Mapped[bytes] = mapped_column(LargeBinary)  # float32 packed
+    created_at: Mapped[datetime] = mapped_column(default=_utc_now)
 
 
 class ScanJob(Base):
