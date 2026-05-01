@@ -207,20 +207,40 @@ class DSMClient:
         folder_path: str,
         suffixes: tuple[str, ...] = (".jpg", ".jpeg"),
     ) -> Iterator[dict[str, Any]]:
-        """folder_path 하위를 재귀 walk. 파일 항목만 yield (additional에 size/time 포함)."""
+        """folder_path 하위를 재귀 walk. 파일 항목만 yield (additional에 size/time 포함).
+
+        견고성:
+        - leading '/' 자동 보정 (DSM은 절대경로 요구)
+        - 단일 폴더의 list 실패는 해당 서브트리만 스킵하고 계속 진행
+        """
+        if folder_path and not folder_path.startswith("/"):
+            folder_path = "/" + folder_path
+
         offset = 0
         page = 1000
         while True:
-            files = self.list_folder(folder_path, offset=offset, limit=page)
+            try:
+                files = self.list_folder(folder_path, offset=offset, limit=page)
+            except DSMError as exc:
+                log.warning("DSM list_folder failed at %s: %s — skipping subtree", folder_path, exc)
+                return
             if not files:
                 break
             for item in files:
-                if item.get("isdir"):
-                    yield from self.walk(item["path"], suffixes=suffixes)
-                else:
-                    name = item.get("name", "").lower()
-                    if not suffixes or name.endswith(suffixes):
-                        yield item
+                try:
+                    if item.get("isdir"):
+                        yield from self.walk(item.get("path", ""), suffixes=suffixes)
+                    else:
+                        name = item.get("name", "").lower()
+                        if not suffixes or name.endswith(suffixes):
+                            yield item
+                except DSMError as exc:
+                    log.warning(
+                        "skip item %s due to DSM error: %s",
+                        item.get("path") or item.get("name"),
+                        exc,
+                    )
+                    continue
             if len(files) < page:
                 break
             offset += page

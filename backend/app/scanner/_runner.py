@@ -37,8 +37,12 @@ def run_scan(
     """root 폴더를 walker로 스캔. ScanJob.id 반환. 파일 단위 commit으로 재개 가능."""
     log.info("scan start: nas_id=%s root=%s", walker.nas_id, root)
 
+    # folders는 nas_id 정보를 포함해 retry 시 어느 스캐너로 다시 돌릴지 알 수 있게 한다.
+    kind = "dsm" if walker.nas_id.startswith("dsm:") else "local"
+    folders_payload = json.dumps([{"kind": kind, "path": str(root)}], ensure_ascii=False)
+
     with session_factory() as s:
-        job = ScanJob(state="running", folders=json.dumps([str(root)]))
+        job = ScanJob(state="running", folders=folders_payload)
         s.add(job)
         s.commit()
         s.refresh(job)

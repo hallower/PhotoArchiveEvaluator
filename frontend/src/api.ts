@@ -231,7 +231,26 @@ export const api = {
         "/api/scan/dsm",
         { folder },
       ),
-    jobs: () => request<ScanJob[]>("GET", "/api/scan/jobs?limit=10"),
+    jobs: (params: { state?: string; limit?: number } = {}) => {
+      const qs = new URLSearchParams();
+      if (params.state) qs.set("state", params.state);
+      qs.set("limit", String(params.limit ?? 30));
+      return request<ScanJob[]>("GET", `/api/scan/jobs?${qs.toString()}`);
+    },
+    retryJob: (id: number) =>
+      request<{ queued: boolean; started: number }>("POST", `/api/scan/jobs/${id}/retry`),
+    deleteJob: (id: number) =>
+      request<void>("DELETE", `/api/scan/jobs/${id}`),
+    bulkDeleteJobs: (state?: string, ids?: number[]) =>
+      request<{ deleted: number }>("DELETE", "/api/scan/jobs", {
+        state: state ?? null,
+        ids: ids ?? null,
+      }),
+    retryFailed: () =>
+      request<{ queued: boolean; retried_jobs: number; started_scans: number }>(
+        "POST",
+        "/api/scan/retry-failed",
+      ),
   },
   portfolios: {
     list: () => request<PortfolioSummary[]>("GET", "/api/portfolios"),

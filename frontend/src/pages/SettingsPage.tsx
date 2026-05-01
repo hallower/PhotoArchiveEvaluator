@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type AppSettings, type BackupRecord } from "../api";
+import { api, type AppSettings, type BackupRecord, type ScanJob } from "../api";
 
 export function SettingsPage({ onClose }: { onClose: () => void }) {
   const [s, setS] = useState<AppSettings | null>(null);
@@ -7,11 +7,66 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [backups, setBackups] = useState<BackupRecord[]>([]);
+  const [failedJobs, setFailedJobs] = useState<ScanJob[]>([]);
+
+  const loadFailed = () =>
+    api.scan
+      .jobs({ state: "failed", limit: 50 })
+      .then(setFailedJobs)
+      .catch(() => {});
 
   useEffect(() => {
     void api.settings.get().then(setS);
     void api.backup.list().then(setBackups).catch(() => {});
+    void loadFailed();
   }, []);
+
+  const retryAllFailed = async () => {
+    setBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const r = await api.scan.retryFailed();
+      setInfo(`${r.retried_jobs}개 잡에 대해 ${r.started_scans}개 스캔이 시작됨`);
+      setTimeout(loadFailed, 2000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const retryOne = async (id: number) => {
+    setBusy(true);
+    try {
+      await api.scan.retryJob(id);
+      setTimeout(loadFailed, 2000);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteOne = async (id: number) => {
+    setBusy(true);
+    try {
+      await api.scan.deleteJob(id);
+      void loadFailed();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteAllFailed = async () => {
+    if (!window.confirm(`${failedJobs.length}개 실패 잡을 모두 삭제할까요?`)) return;
+    setBusy(true);
+    try {
+      const r = await api.scan.bulkDeleteJobs("failed");
+      setInfo(`${r.deleted}개 삭제됨`);
+      void loadFailed();
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const triggerBackup = async () => {
     setBusy(true);
@@ -146,6 +201,68 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
             onChange={(scan_dsm_paths) => update({ scan_dsm_paths })}
             placeholder='DSM 절대경로 (예: /photo/My Pictures-2023)'
           />
+        </Section>
+
+        <Section title={`실패한 스캔 (${failedJobs.length})`}>
+          <p style={{ color: "var(--text-dim)", fontSize: 12, margin: "0 0 8px 0" }}>
+            서버는 30분마다 실패한 스캔을 자동 재시도합니다. 즉시 재시도하려면 아래 버튼.
+          </p>
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <button onClick={retryAllFailed} disabled={busy || failedJobs.length === 0}>
+              모두 재시도
+            </button>
+            <button
+              className="ghost"
+              onClick={deleteAllFailed}
+              disabled={busy || failedJobs.length === 0}
+              style={{ color: "var(--danger)" }}
+            >
+              모두 삭제
+            </button>
+          </div>
+          {failedJobs.length === 0 ? (
+            <div style={{ color: "var(--text-dim)", fontSize: 12 }}>실패한 스캔 없음</div>
+          ) : (
+            <div style={{ fontSize: 11, display: "flex", flexDirection: "column", gap: 4 }}>
+              {failedJobs.map((j) => (
+                <div
+                  key={j.id}
+                  style={{
+                    display: "flex",
+                    gap: 6,
+                    padding: "6px 8px",
+                    background: "var(--panel)",
+                    borderRadius: 4,
+                    alignItems: "center",
+                  }}
+                >
+                  <span style={{ width: 30, color: "var(--text-dim)" }}>#{j.id}</span>
+                  <span style={{ width: 90 }}>
+                    {j.started_at ? new Date(j.started_at).toLocaleString("ko-KR") : "-"}
+                  </span>
+                  <span style={{ flex: 1, wordBreak: "break-all", color: "var(--danger)" }}>
+                    {j.error ?? ""}
+                  </span>
+                  <button
+                    className="ghost"
+                    onClick={() => retryOne(j.id)}
+                    disabled={busy}
+                    style={{ padding: "2px 8px", fontSize: 10 }}
+                  >
+                    재시도
+                  </button>
+                  <button
+                    className="ghost"
+                    onClick={() => deleteOne(j.id)}
+                    disabled={busy}
+                    style={{ padding: "2px 8px", fontSize: 10, color: "var(--danger)" }}
+                  >
+                    삭제
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </Section>
 
         <Section title="DB 백업">

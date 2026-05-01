@@ -29,6 +29,7 @@ from .api.scan import router as scan_router
 from .api.settings import router as settings_router
 from .auth.dependencies import require_auth
 from .auth.router import router as auth_router
+from . import scheduler
 from .config import settings
 from .evaluator.worker import recover_pending
 from .storage.db import SessionLocal
@@ -76,7 +77,11 @@ async def lifespan(app: FastAPI):
         recovered = recover_pending(session)
     if recovered:
         logger.info("recovered %d in_progress eval_jobs to pending", recovered)
-    yield
+    scheduler.start()
+    try:
+        yield
+    finally:
+        scheduler.stop()
 
 
 app = FastAPI(
