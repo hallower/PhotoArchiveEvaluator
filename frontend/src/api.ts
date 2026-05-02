@@ -41,6 +41,30 @@ export interface AppSettings {
   eval_max_workers: number;
   default_eval_max_workers: number;
   max_allowed_workers: number;
+  external_allow_send: boolean;
+  external_strip_exif: boolean;
+  external_default_model: string;
+  default_external_model: string;
+  default_advanced_prompt: string;
+  configured_api_providers: string[];
+}
+
+export interface AdvancedReview {
+  id: number;
+  model_id: string;
+  prompt: string;
+  response: string;
+  cost_usd: number | null;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  user_note: string | null;
+  created_at: string;
+}
+
+export interface ExternalModel {
+  id: string;
+  input_price_per_million: number;
+  output_price_per_million: number;
 }
 
 export interface PhotoListResponse {
@@ -274,6 +298,34 @@ export const api = {
     removeItems: (id: number, photo_ids: number[]) =>
       request<{ removed: number }>("DELETE", `/api/portfolios/${id}/items`, { photo_ids }),
   },
+  advanced: {
+    review: (photo_id: number, prompt?: string, model?: string) =>
+      request<AdvancedReview>(
+        "POST",
+        `/api/photos/${photo_id}/advanced-review`,
+        {
+          prompt: prompt ?? null,
+          model: model ?? null,
+        },
+      ),
+    listReviews: (photo_id: number) =>
+      request<AdvancedReview[]>("GET", `/api/photos/${photo_id}/advanced-reviews`),
+    deleteReview: (id: number) =>
+      request<void>("DELETE", `/api/advanced-reviews/${id}`),
+    costPreview: (photo_id: number, model?: string) => {
+      const qs = new URLSearchParams();
+      qs.set("photo_id", String(photo_id));
+      if (model) qs.set("model", model);
+      return request<{
+        model: string;
+        cost_usd_estimate: number;
+        image_width: number;
+        image_height: number;
+      }>("GET", `/api/advanced/cost-preview?${qs.toString()}`);
+    },
+    models: () =>
+      request<{ models: ExternalModel[] }>("GET", "/api/advanced/models"),
+  },
   backup: {
     trigger: () =>
       request<{ queued: boolean; id: number }>("POST", "/api/backup"),
@@ -287,12 +339,19 @@ export const api = {
       scan_local_paths: string[];
       scan_dsm_paths: string[];
       eval_max_workers: number;
+      external_allow_send: boolean;
+      external_strip_exif: boolean;
+      external_default_model: string;
     }>) =>
       request<{ ok: boolean; prompt_rescored: boolean }>(
         "PUT",
         "/api/settings",
         patch,
       ),
+    putApiKey: (provider: string, api_key: string) =>
+      request<void>("PUT", "/api/settings/api-keys", { provider, api_key }),
+    deleteApiKey: (provider: string) =>
+      request<void>("DELETE", `/api/settings/api-keys/${provider}`),
     scanSaved: () =>
       request<{ queued: boolean; started: { local: number; dsm: number } }>(
         "POST",

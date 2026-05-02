@@ -289,6 +289,53 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
           )}
         </Section>
 
+        <Section title="외부 API (고급 평가)">
+          <p style={{ color: "var(--text-dim)", fontSize: 12, margin: "0 0 10px 0" }}>
+            Claude vision 등 외부 비전 모델로 사진별 자연어 리뷰. 사진 데이터가
+            네트워크 외부로 전송됩니다.
+          </p>
+
+          <label style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+            <input
+              type="checkbox"
+              checked={s.external_allow_send}
+              onChange={(e) => update({ external_allow_send: e.target.checked })}
+            />
+            <span style={{ fontSize: 13 }}>외부 전송 허용 (체크 안 하면 호출 차단)</span>
+          </label>
+          <label style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
+            <input
+              type="checkbox"
+              checked={s.external_strip_exif}
+              onChange={(e) => update({ external_strip_exif: e.target.checked })}
+            />
+            <span style={{ fontSize: 13 }}>전송 전 EXIF·GPS 제거 (권장 ON)</span>
+          </label>
+
+          <div style={{ marginBottom: 10, fontSize: 12 }}>
+            <label style={{ display: "block", color: "var(--text-dim)", marginBottom: 4 }}>
+              기본 모델
+            </label>
+            <select
+              value={s.external_default_model}
+              onChange={(e) => update({ external_default_model: e.target.value })}
+            >
+              <option value="claude-haiku-4-5">claude-haiku-4-5 (저렴)</option>
+              <option value="claude-sonnet-4-6">claude-sonnet-4-6 (균형)</option>
+              <option value="claude-opus-4-7">claude-opus-4-7 (최고)</option>
+            </select>
+          </div>
+
+          <ApiKeyEditor
+            provider="anthropic"
+            label="Anthropic API 키"
+            isSet={s.configured_api_providers.includes("anthropic")}
+            onChange={() =>
+              api.settings.get().then(setS)
+            }
+          />
+        </Section>
+
         <Section title="DB 백업">
           <p style={{ color: "var(--text-dim)", fontSize: 12, margin: "0 0 8px 0" }}>
             현재 SQLite DB를 NAS의 <code>/photo/.photoarchive/backups/</code> 폴더로 즉시 복사합니다.
@@ -381,6 +428,67 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>{title}</h3>
       {children}
     </section>
+  );
+}
+
+function ApiKeyEditor({
+  provider,
+  label,
+  isSet,
+  onChange,
+}: {
+  provider: string;
+  label: string;
+  isSet: boolean;
+  onChange: () => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    if (!draft.trim()) return;
+    setBusy(true);
+    try {
+      await api.settings.putApiKey(provider, draft.trim());
+      setDraft("");
+      onChange();
+    } finally {
+      setBusy(false);
+    }
+  };
+  const clear = async () => {
+    if (!window.confirm(`${provider} 키를 키체인에서 제거할까요?`)) return;
+    setBusy(true);
+    try {
+      await api.settings.deleteApiKey(provider);
+      onChange();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <label style={{ display: "block", color: "var(--text-dim)", fontSize: 12, marginBottom: 4 }}>
+        {label} {isSet && <span style={{ color: "var(--score-4)" }}>● 등록됨 (키체인)</span>}
+      </label>
+      <div style={{ display: "flex", gap: 6 }}>
+        <input
+          type="password"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder={isSet ? "(저장됨 — 새 키로 교체하려면 입력)" : "sk-ant-..."}
+          style={{ flex: 1 }}
+          autoComplete="off"
+        />
+        <button onClick={save} disabled={busy || !draft.trim()}>저장</button>
+        {isSet && (
+          <button className="ghost" onClick={clear} disabled={busy} style={{ color: "var(--danger)" }}>
+            제거
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 

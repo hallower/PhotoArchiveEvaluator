@@ -16,6 +16,9 @@ from .storage.models import Setting
 # 키 상수
 EVAL_PROMPT = "eval.prompt"
 EVAL_MAX_WORKERS = "eval.max_workers"
+EXTERNAL_ALLOW_SEND = "external.allow_send"
+EXTERNAL_STRIP_EXIF = "external.strip_exif"
+EXTERNAL_DEFAULT_MODEL = "external.default_model"
 LIBRARY_MIN_SCORE = "library.min_score"
 SCAN_LOCAL_PATHS = "scan.local.paths"  # JSON list[str]
 SCAN_DSM_PATHS = "scan.dsm.paths"  # JSON list[str]
@@ -28,6 +31,17 @@ DEFAULT_EVAL_PROMPT = (
 DEFAULT_MIN_SCORE = 4.0
 DEFAULT_MAX_WORKERS = 2  # GPU 1개 + 다운로드 오버랩 가정 시 2가 sweet spot
 MAX_ALLOWED_WORKERS = 6
+DEFAULT_ADVANCED_PROMPT = (
+    "You are a senior photography reviewer. Analyze this photograph with focus on:\n"
+    "1. Composition and framing\n"
+    "2. Lighting and tonal quality\n"
+    "3. Subject and storytelling\n"
+    "4. Technical execution (focus, exposure, color)\n"
+    "5. Overall mood and emotional impact\n\n"
+    "Conclude with: (a) specific strengths, (b) areas to improve, "
+    "(c) suitability for portfolio/contest submission with reasoning."
+)
+DEFAULT_EXTERNAL_MODEL = "claude-sonnet-4-6"
 
 
 def _utc_now() -> datetime:
@@ -81,6 +95,34 @@ def get_max_workers(session: Session) -> int:
 def set_max_workers(session: Session, n: int) -> None:
     n = max(1, min(MAX_ALLOWED_WORKERS, int(n)))
     set_value(session, EVAL_MAX_WORKERS, str(n))
+
+
+def get_external_allow_send(session: Session) -> bool:
+    raw = get(session, EXTERNAL_ALLOW_SEND)
+    return (raw or "false").lower() == "true"
+
+
+def set_external_allow_send(session: Session, allow: bool) -> None:
+    set_value(session, EXTERNAL_ALLOW_SEND, "true" if allow else "false")
+
+
+def get_external_strip_exif(session: Session) -> bool:
+    raw = get(session, EXTERNAL_STRIP_EXIF)
+    if raw is None:
+        return True  # 기본 ON (개인정보 보호)
+    return raw.lower() == "true"
+
+
+def set_external_strip_exif(session: Session, strip: bool) -> None:
+    set_value(session, EXTERNAL_STRIP_EXIF, "true" if strip else "false")
+
+
+def get_external_default_model(session: Session) -> str:
+    return get(session, EXTERNAL_DEFAULT_MODEL, default=DEFAULT_EXTERNAL_MODEL) or DEFAULT_EXTERNAL_MODEL
+
+
+def set_external_default_model(session: Session, model: str) -> None:
+    set_value(session, EXTERNAL_DEFAULT_MODEL, model)
 
 
 def get_paths_list(session: Session, key: str) -> list[str]:

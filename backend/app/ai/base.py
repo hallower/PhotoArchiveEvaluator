@@ -33,3 +33,25 @@ class ScoreModel(Protocol):
     def score(self, image: bytes) -> ScoreResult:
         """JPEG 바이트를 받아 미학 점수를 반환한다."""
         ...
+
+
+@dataclass(frozen=True)
+class ReviewResult:
+    model_id: str
+    response: str
+    cost_usd: float | None = None
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+
+
+@runtime_checkable
+class AdvancedReviewModel(Protocol):
+    """외부 비전 LLM 기반 상세 리뷰. SPEC §6.3."""
+
+    model_id: str
+
+    def review(self, image: bytes, prompt: str) -> ReviewResult: ...
+
+    def estimate_cost(
+        self, image_width: int, image_height: int, max_output_tokens: int
+    ) -> float: ...

@@ -19,8 +19,11 @@ from ..evaluator.rescore import rescore_prompt
 from ..nas.credentials import load_config, load_device_id, load_password
 from ..scanner.dsm import DSMScanner
 from ..scanner.local import LocalScanner
+from ..ai.remote import keys as api_keys
 from ..settings_store import (
+    DEFAULT_ADVANCED_PROMPT,
     DEFAULT_EVAL_PROMPT,
+    DEFAULT_EXTERNAL_MODEL,
     DEFAULT_MAX_WORKERS,
     DEFAULT_MIN_SCORE,
     EVAL_PROMPT,
@@ -28,9 +31,15 @@ from ..settings_store import (
     SCAN_DSM_PATHS,
     SCAN_LOCAL_PATHS,
     get_eval_prompt,
+    get_external_allow_send,
+    get_external_default_model,
+    get_external_strip_exif,
     get_max_workers,
     get_min_score,
     get_paths_list,
+    set_external_allow_send,
+    set_external_default_model,
+    set_external_strip_exif,
     set_max_workers,
     set_min_score,
     set_paths_list,
@@ -51,6 +60,14 @@ class _SettingsUpdate(BaseModel):
     scan_local_paths: list[str] | None = None
     scan_dsm_paths: list[str] | None = None
     eval_max_workers: int | None = Field(default=None, ge=1, le=MAX_ALLOWED_WORKERS)
+    external_allow_send: bool | None = None
+    external_strip_exif: bool | None = None
+    external_default_model: str | None = None
+
+
+class _ApiKeyIn(BaseModel):
+    provider: str  # 'anthropic' | 'openai' | 'google'
+    api_key: str
 
 
 @router.get("")
@@ -65,6 +82,12 @@ def get_settings(session: Session = Depends(get_session)) -> dict:
         "eval_max_workers": get_max_workers(session),
         "default_eval_max_workers": DEFAULT_MAX_WORKERS,
         "max_allowed_workers": MAX_ALLOWED_WORKERS,
+        "external_allow_send": get_external_allow_send(session),
+        "external_strip_exif": get_external_strip_exif(session),
+        "external_default_model": get_external_default_model(session),
+        "default_external_model": DEFAULT_EXTERNAL_MODEL,
+        "default_advanced_prompt": DEFAULT_ADVANCED_PROMPT,
+        "configured_api_providers": api_keys.configured_providers(),
     }
 
 
@@ -92,6 +115,15 @@ def put_settings(
     if body.eval_max_workers is not None:
         set_max_workers(session, body.eval_max_workers)
 
+    if body.external_allow_send is not None:
+        set_external_allow_send(session, body.external_allow_send)
+
+    if body.external_strip_exif is not None:
+        set_external_strip_exif(session, body.external_strip_exif)
+
+    if body.external_default_model is not None:
+        set_external_default_model(session, body.external_default_model)
+
     # prompt가 바뀌었으면 백그라운드 재평가 큐
     if prompt_changed:
         threading.Thread(
@@ -102,6 +134,23 @@ def put_settings(
         ).start()
 
     return {"ok": True, "prompt_rescored": prompt_changed}
+
+
+@router.put("/api-keys", status_code=status.HTTP_204_NO_CONTENT)
+def put_api_key(body: _ApiKeyIn) -> None:
+    if body.provider not in api_keys.KNOWN_PROVIDERS:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"unknown provider; expected one of {api_keys.KNOWN_PROVIDERS}",
+        )
+    if not body.api_key.strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty key")
+    api_keys.set_key(body.provider, body.api_key.strip())
+
+
+@router.delete("/api-keys/{provider}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_api_key(provider: str) -> None:
+    api_keys.delete(provider)
 
 
 @router.post("/scan-saved", status_code=status.HTTP_202_ACCEPTED)

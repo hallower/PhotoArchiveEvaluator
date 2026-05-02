@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type PhotoDetail } from "../api";
+import { api, type AdvancedReview, type PhotoDetail } from "../api";
 
 export function PhotoModal({
   photoId,
@@ -14,6 +14,10 @@ export function PhotoModal({
     { id: number; hamming: number; thumb_url: string }[] | null
   >(null);
   const [selectedPaths, setSelectedPaths] = useState<Set<number>>(new Set());
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [advReviews, setAdvReviews] = useState<AdvancedReview[]>([]);
+
+  const loadReviews = () => api.advanced.listReviews(photoId).then(setAdvReviews).catch(() => {});
 
   const togglePath = (id: number) =>
     setSelectedPaths((prev) => {
@@ -28,6 +32,7 @@ export function PhotoModal({
 
   useEffect(() => {
     void load();
+    void loadReviews();
     setSimilar(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [photoId]);
@@ -260,6 +265,46 @@ export function PhotoModal({
                 비슷한 사진 찾기 (pHash)
               </button>
 
+              <button
+                onClick={() => setShowAdvanced(true)}
+                disabled={busy}
+                style={{ marginTop: 8 }}
+              >
+                고급 평가 (Claude vision)
+              </button>
+
+              {advReviews.length > 0 && (
+                <div style={{ marginTop: 12 }}>
+                  <h4 style={{ margin: "6px 0", fontSize: 12 }}>
+                    고급 평가 이력 ({advReviews.length})
+                  </h4>
+                  {advReviews.slice(0, 3).map((r) => (
+                    <div
+                      key={r.id}
+                      style={{
+                        background: "var(--panel)",
+                        padding: 8,
+                        borderRadius: 4,
+                        marginBottom: 4,
+                        fontSize: 11,
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between" }}>
+                        <span style={{ color: "var(--text-dim)" }}>{r.model_id}</span>
+                        <span style={{ color: "var(--text-dim)" }}>
+                          ${r.cost_usd?.toFixed(4) ?? "-"}
+                        </span>
+                      </div>
+                      <div style={{ marginTop: 4, whiteSpace: "pre-wrap", color: "var(--text)" }}>
+                        {r.response.length > 240
+                          ? r.response.slice(0, 240) + "…"
+                          : r.response}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {similar && (
                 <div style={{ marginTop: 12 }}>
                   <h4 style={{ margin: "6px 0", fontSize: 12 }}>
@@ -303,6 +348,172 @@ export function PhotoModal({
         </div>
         <div className="close" onClick={onClose}>
           ×
+        </div>
+      </div>
+
+      {showAdvanced && (
+        <AdvancedReviewDialog
+          photoId={photoId}
+          onClose={() => setShowAdvanced(false)}
+          onDone={() => {
+            setShowAdvanced(false);
+            void loadReviews();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function AdvancedReviewDialog({
+  photoId,
+  onClose,
+  onDone,
+}: {
+  photoId: number;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [prompt, setPrompt] = useState("");
+  const [defaultPrompt, setDefaultPrompt] = useState("");
+  const [model, setModel] = useState("claude-sonnet-4-6");
+  const [costEstimate, setCostEstimate] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [response, setResponse] = useState<string | null>(null);
+
+  useEffect(() => {
+    void api.settings.get().then((s) => {
+      setPrompt(s.default_advanced_prompt);
+      setDefaultPrompt(s.default_advanced_prompt);
+      setModel(s.external_default_model);
+    });
+  }, []);
+
+  useEffect(() => {
+    void api.advanced.costPreview(photoId, model).then((r) => {
+      setCostEstimate(r.cost_usd_estimate);
+    });
+  }, [photoId, model]);
+
+  const run = async () => {
+    setBusy(true);
+    setError(null);
+    setResponse(null);
+    try {
+      const r = await api.advanced.review(photoId, prompt, model);
+      setResponse(r.response);
+      // 약간 후 닫기 — 사용자가 결과를 읽을 시간
+      setTimeout(onDone, 1500);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal-bg" onClick={onClose} style={{ zIndex: 200 }}>
+      <div
+        className="modal"
+        style={{
+          maxWidth: 640,
+          flexDirection: "column",
+          padding: 22,
+          maxHeight: "90vh",
+          overflowY: "auto",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 style={{ margin: "0 0 12px 0" }}>고급 평가 (Claude vision)</h3>
+
+        <label style={{ color: "var(--text-dim)", fontSize: 12, marginBottom: 4 }}>모델</label>
+        <select value={model} onChange={(e) => setModel(e.target.value)} disabled={busy}>
+          <option value="claude-haiku-4-5">claude-haiku-4-5 (저렴)</option>
+          <option value="claude-sonnet-4-6">claude-sonnet-4-6 (균형)</option>
+          <option value="claude-opus-4-7">claude-opus-4-7 (최고)</option>
+        </select>
+
+        <label style={{ color: "var(--text-dim)", fontSize: 12, marginTop: 12, marginBottom: 4 }}>
+          프롬프트 (영어 권장)
+        </label>
+        <textarea
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          rows={6}
+          disabled={busy}
+          style={{
+            background: "var(--panel)",
+            color: "var(--text)",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            padding: 10,
+            font: "inherit",
+            resize: "vertical",
+          }}
+        />
+        <button
+          type="button"
+          className="ghost"
+          onClick={() => setPrompt(defaultPrompt)}
+          disabled={busy}
+          style={{ marginTop: 4, alignSelf: "flex-start", fontSize: 11 }}
+        >
+          기본값 복원
+        </button>
+
+        <div
+          style={{
+            marginTop: 12,
+            background: "var(--panel)",
+            padding: 8,
+            borderRadius: 4,
+            fontSize: 12,
+            color: "var(--text-dim)",
+          }}
+        >
+          예상 비용:{" "}
+          <strong style={{ color: "var(--text)" }}>
+            {costEstimate !== null ? `$${costEstimate.toFixed(4)}` : "..."}
+          </strong>{" "}
+          (1회 호출 기준 — 실제 비용은 응답 후 기록)
+        </div>
+
+        {response && (
+          <div
+            style={{
+              marginTop: 12,
+              background: "var(--panel-2)",
+              padding: 10,
+              borderRadius: 4,
+              fontSize: 12,
+              whiteSpace: "pre-wrap",
+              maxHeight: 200,
+              overflowY: "auto",
+            }}
+          >
+            {response}
+          </div>
+        )}
+
+        {error && (
+          <div style={{ color: "var(--danger)", marginTop: 10, fontSize: 12 }}>
+            {error}
+          </div>
+        )}
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 8,
+            marginTop: 14,
+          }}
+        >
+          <button className="ghost" onClick={onClose} disabled={busy}>취소</button>
+          <button onClick={run} disabled={busy || !prompt.trim()}>
+            {busy ? "분석 중..." : "고급 평가 실행"}
+          </button>
         </div>
       </div>
     </div>

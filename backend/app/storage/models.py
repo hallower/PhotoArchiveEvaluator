@@ -201,6 +201,42 @@ class PortfolioItem(Base):
     added_at: Mapped[datetime] = mapped_column(default=_utc_now)
 
 
+class AdvancedReview(Base):
+    """SPEC §4.6 — 외부 API 고급 평가 결과. 동일 사진에 다중 모델·다중 시도 누적."""
+
+    __tablename__ = "advanced_reviews"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    photo_id: Mapped[int] = mapped_column(
+        ForeignKey("photos.id", ondelete="CASCADE"), index=True
+    )
+    model_id: Mapped[str]  # e.g. 'claude:claude-sonnet-4-6'
+    prompt: Mapped[str] = mapped_column(Text)
+    response: Mapped[str] = mapped_column(Text)
+    cost_usd: Mapped[float | None] = mapped_column(default=None)
+    tokens_in: Mapped[int | None] = mapped_column(default=None)
+    tokens_out: Mapped[int | None] = mapped_column(default=None)
+    user_note: Mapped[str | None] = mapped_column(Text, default=None)
+    user_tags: Mapped[str | None] = mapped_column(Text, default=None)  # JSON
+    created_at: Mapped[datetime] = mapped_column(default=_utc_now, index=True)
+
+
+class ApiCost(Base):
+    """SPEC §4.10 — 외부 API 호출 비용 추적."""
+
+    __tablename__ = "api_costs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    model_id: Mapped[str]
+    photo_id: Mapped[int | None] = mapped_column(
+        ForeignKey("photos.id", ondelete="SET NULL"), default=None
+    )
+    cost_usd: Mapped[float]
+    tokens_in: Mapped[int | None] = mapped_column(default=None)
+    tokens_out: Mapped[int | None] = mapped_column(default=None)
+    created_at: Mapped[datetime] = mapped_column(default=_utc_now, index=True)
+
+
 class Backup(Base):
     __tablename__ = "backups"
 
