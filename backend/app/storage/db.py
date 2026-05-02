@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from ..config import settings
@@ -28,6 +28,16 @@ def _build_engine():
 
 
 engine = _build_engine()
+
+
+# SQLite는 기본적으로 FK CASCADE를 적용하지 않음. 매 연결마다 활성화해야 함.
+if settings.db_url.startswith("sqlite"):
+
+    @event.listens_for(engine, "connect")
+    def _enable_sqlite_fk(dbapi_connection, _record):  # type: ignore[no-untyped-def]
+        cur = dbapi_connection.cursor()
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.close()
 
 SessionLocal = sessionmaker(
     bind=engine,

@@ -67,6 +67,32 @@ export interface ExternalModel {
   output_price_per_million: number;
 }
 
+export interface ContestSummary {
+  id: number;
+  name: string;
+  info_text: string | null;
+  themes: string[];
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ContestMatch {
+  theme: string;
+  photos: {
+    photo_id: number;
+    similarity: number;
+    taken_at: string | null;
+    camera_model: string | null;
+    thumb_url: string;
+  }[];
+}
+
+export interface ContestMatches {
+  contest: ContestSummary;
+  matches: ContestMatch[];
+  note?: string;
+}
+
 export interface PhotoListResponse {
   items: PhotoSummary[];
   total: number;
@@ -297,6 +323,33 @@ export const api = {
       request<{ added: number }>("POST", `/api/portfolios/${id}/items`, { photo_ids }),
     removeItems: (id: number, photo_ids: number[]) =>
       request<{ removed: number }>("DELETE", `/api/portfolios/${id}/items`, { photo_ids }),
+  },
+  contests: {
+    list: () => request<ContestSummary[]>("GET", "/api/contests"),
+    get: (id: number) => request<ContestSummary>("GET", `/api/contests/${id}`),
+    create: (name: string, info_text: string | null, themes: string[]) =>
+      request<ContestSummary>("POST", "/api/contests", {
+        name,
+        info_text,
+        themes,
+      }),
+    update: (id: number, patch: Partial<{ name: string; info_text: string; themes: string[] }>) =>
+      request<ContestSummary>("PUT", `/api/contests/${id}`, patch),
+    remove: (id: number) => request<void>("DELETE", `/api/contests/${id}`),
+    matches: (id: number, top_n = 10) =>
+      request<ContestMatches>("GET", `/api/contests/${id}/matches?top_n=${top_n}`),
+    analyze: (info_text: string) =>
+      request<{ themes: string[]; model: string; tokens_in: number; tokens_out: number }>(
+        "POST",
+        "/api/contests/analyze",
+        { info_text },
+      ),
+    makePortfolio: (id: number, name: string, photo_ids: number[]) =>
+      request<{ portfolio_id: number; name: string }>(
+        "POST",
+        `/api/contests/${id}/portfolio`,
+        { name, photo_ids },
+      ),
   },
   advanced: {
     review: (photo_id: number, prompt?: string, model?: string) =>

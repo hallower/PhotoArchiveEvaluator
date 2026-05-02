@@ -22,6 +22,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .api.advanced import router as advanced_router
 from .api.backup import router as backup_router
+from .api.contests import router as contests_router
 from .api.eval import router as eval_router
 from .api.nas import router as nas_router
 from .api.photos import router as photos_router
@@ -111,6 +112,7 @@ app.include_router(settings_router)
 app.include_router(portfolios_router)
 app.include_router(backup_router)
 app.include_router(advanced_router)
+app.include_router(contests_router)
 
 
 @app.get("/healthz")

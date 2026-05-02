@@ -237,6 +237,19 @@ class ApiCost(Base):
     created_at: Mapped[datetime] = mapped_column(default=_utc_now, index=True)
 
 
+class Contest(Base):
+    """공모전. info_text(원문) → themes(JSON list) 추출 후 CLIP 매칭에 사용."""
+
+    __tablename__ = "contests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str]
+    info_text: Mapped[str | None] = mapped_column(Text, default=None)
+    themes: Mapped[str] = mapped_column(Text, default="[]")  # JSON list[str]
+    created_at: Mapped[datetime] = mapped_column(default=_utc_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_utc_now, onupdate=_utc_now)
+
+
 class Backup(Base):
     __tablename__ = "backups"
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type PhotoSummary, type PortfolioSummary, type QueueCounts } from "../api";
+import { ContestsPage } from "./ContestsPage";
 import { PhotoModal } from "./PhotoModal";
 import { PortfoliosPage } from "./PortfoliosPage";
 import { SettingsPage } from "./SettingsPage";
@@ -30,6 +31,7 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
   const [selected, setSelectedSet] = useState<Set<number>>(new Set());
   const [showPortfolios, setShowPortfolios] = useState(false);
   const [portfolios, setPortfolios] = useState<PortfolioSummary[]>([]);
+  const [showContests, setShowContests] = useState(false);
 
   const toggleSelected = (id: number) =>
     setSelectedSet((prev) => {
@@ -264,6 +266,9 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
           <button className="ghost" onClick={() => setShowPortfolios(true)}>
             포트폴리오
           </button>
+          <button className="ghost" onClick={() => setShowContests(true)}>
+            공모전
+          </button>
           <button className="ghost" onClick={() => setShowSettings(true)}>
             설정
           </button>
@@ -439,6 +444,16 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
             setShowSettings(false);
             void fetchList();
           }}
+        />
+      )}
+
+      {showContests && (
+        <ContestsPage
+          onClose={() => {
+            setShowContests(false);
+            refreshPortfolios();
+          }}
+          onOpenPhoto={(id) => setOpenPhotoId(id)}
         />
       )}
     </div>
