@@ -106,6 +106,9 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
         scan_local_paths: s.scan_local_paths,
         scan_dsm_paths: s.scan_dsm_paths,
         eval_max_workers: s.eval_max_workers,
+        external_allow_send: s.external_allow_send,
+        external_strip_exif: s.external_strip_exif,
+        external_default_model: s.external_default_model,
       });
       setInfo(
         r.prompt_rescored
