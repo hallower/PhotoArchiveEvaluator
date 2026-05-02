@@ -127,6 +127,7 @@ export interface PhotoDetail extends PhotoSummary {
   paths: PhotoPathEntry[];
   evaluations: EvaluationDetail[];
   user_note: string | null;
+  tags: { name: string; confidence: number }[];
 }
 
 export interface PortfolioSummary {

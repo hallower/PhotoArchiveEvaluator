@@ -24,7 +24,7 @@ from ..auth.dependencies import require_auth
 from ..config import settings
 from ..nas.session import open_dsm_client
 from ..storage.db import get_session
-from ..storage.models import Embedding, Evaluation, Photo, PhotoPath, UserScore
+from ..storage.models import Embedding, Evaluation, Photo, PhotoPath, PhotoTag, Tag, UserScore
 
 log = logging.getLogger(__name__)
 
@@ -272,6 +272,13 @@ def get_photo(photo_id: int, session: Session = Depends(get_session)) -> dict:
         select(UserScore).where(UserScore.photo_id == photo_id)
     ).scalar_one_or_none()
 
+    tag_rows = session.execute(
+        select(Tag.name, PhotoTag.confidence)
+        .join(PhotoTag, PhotoTag.tag_id == Tag.id)
+        .where(PhotoTag.photo_id == photo_id)
+        .order_by(PhotoTag.confidence.desc())
+    ).all()
+
     return {
         "id": photo.id,
         "sha256": photo.sha256,
@@ -318,6 +325,7 @@ def get_photo(photo_id: int, session: Session = Depends(get_session)) -> dict:
         ],
         "user_score": user_score.score if user_score else None,
         "user_note": user_score.note if user_score else None,
+        "tags": [{"name": n, "confidence": c} for n, c in tag_rows],
         "thumb_url": f"/api/photos/{photo.id}/thumb",
     }
 

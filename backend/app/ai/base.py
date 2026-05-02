@@ -44,6 +44,43 @@ class ReviewResult:
     tokens_out: int | None = None
 
 
+@dataclass(frozen=True)
+class CaptionResult:
+    caption: str
+    lang: str
+    model_id: str
+    model_version: str
+
+
+@runtime_checkable
+class CaptionModel(Protocol):
+    model_id: str
+    model_version: str
+
+    def caption(self, image: bytes) -> CaptionResult: ...
+
+
+@dataclass(frozen=True)
+class TagItem:
+    name: str
+    confidence: float
+
+
+@dataclass(frozen=True)
+class TagResult:
+    tags: list[TagItem]
+    model_id: str
+    model_version: str
+
+
+@runtime_checkable
+class TagModel(Protocol):
+    model_id: str
+    model_version: str
+
+    def tag_from_image(self, image: bytes) -> TagResult: ...
+
+
 @runtime_checkable
 class AdvancedReviewModel(Protocol):
     """외부 비전 LLM 기반 상세 리뷰. SPEC §6.3."""

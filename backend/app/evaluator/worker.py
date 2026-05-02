@@ -23,12 +23,12 @@ import json
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from ..ai.base import ScoreModel
+from ..ai.base import CaptionModel, ScoreModel, TagModel
 from ..ai.embed import EmbeddingModel, cosine_similarity
 from ..nas.dsm import DSMClient
 from ..nas.session import open_dsm_client
 from ..settings_store import get_eval_prompt
-from ..storage.models import Embedding, EvalJob, Evaluation, PhotoPath
+from ..storage.models import Embedding, EvalJob, Evaluation, PhotoPath, PhotoTag, Tag
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +63,22 @@ def default_embed_model() -> EmbeddingModel:
     return CLIPLocal()
 
 
+@functools.cache
+def default_caption_model() -> CaptionModel:
+    """BLIP-base. ~500MB VRAM. 첫 호출 시 1GB 다운로드 + ~10초 로드."""
+    from ..ai.local.blip import BlipCaption
+
+    return BlipCaption()
+
+
+@functools.cache
+def default_tag_model() -> TagModel:
+    """CLIP zero-shot 태거 (기존 CLIP 임베딩 모델 재사용)."""
+    from ..ai.local.clip_tagger import CLIPTagger
+
+    return CLIPTagger(embed_model=default_embed_model())
+
+
 PROMPT_MODEL_ID = "clip-prompt"
 PROMPT_MODEL_VERSION = "vit-l-14"
 
@@ -83,10 +99,14 @@ class EvaluatorWorker:
         session_factory: Callable[[], Session],
         score_model: ScoreModel | None = None,
         embed_model: EmbeddingModel | None = None,
+        caption_model: CaptionModel | None = None,
+        tag_model: TagModel | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._score_model = score_model
         self._embed_model = embed_model
+        self._caption_model = caption_model
+        self._tag_model = tag_model
         self._dsm_client: DSMClient | None = None
         self._prompt_text_cache: tuple[str, bytes] | None = None  # (prompt, text_vec)
 
@@ -101,6 +121,18 @@ class EvaluatorWorker:
         if self._embed_model is None:
             self._embed_model = default_embed_model()
         return self._embed_model
+
+    @property
+    def captioner(self) -> CaptionModel:
+        if self._caption_model is None:
+            self._caption_model = default_caption_model()
+        return self._caption_model
+
+    @property
+    def tagger(self) -> TagModel:
+        if self._tag_model is None:
+            self._tag_model = default_tag_model()
+        return self._tag_model
 
     def _prompt_text_vector(self, prompt: str) -> bytes:
         """프롬프트의 CLIP text embedding을 캐시. 동일 prompt면 재사용."""
@@ -176,11 +208,14 @@ class EvaluatorWorker:
             with _gpu_lock:
                 score_result = self.model.score(content)
                 image_emb = self.embed.embed_image(content)
+                caption_result = self.captioner.caption(content)
             # CPU/DB — lock 밖
             prompt_text = get_eval_prompt(session)
             text_vec = self._prompt_text_vector(prompt_text)
             sim = cosine_similarity(image_emb.vector, text_vec)
             prompt_score = _prompt_score(sim)
+            # 태그는 이미 만들어둔 image embedding으로 cosine — 추가 GPU 호출 없음
+            tag_result = self.tagger.tag_from_embedding(image_emb.vector)
         except Exception as exc:  # noqa: BLE001
             log.exception("eval failed for photo %d", photo_id)
             job.last_error = str(exc)[:1000]
@@ -191,7 +226,7 @@ class EvaluatorWorker:
             session.commit()
             return True
 
-        # 1) 미학 점수 (AestheticV25)
+        # 1) 미학 점수 + 캡션 (AestheticV25 + Florence-2)
         session.add(
             Evaluation(
                 photo_id=photo_id,
@@ -200,6 +235,8 @@ class EvaluatorWorker:
                 ai_score=score_result.score,
                 raw_score=score_result.raw_score,
                 confidence=score_result.confidence,
+                caption=caption_result.caption,
+                caption_lang=caption_result.lang,
             )
         )
         # 2) CLIP image embedding (upsert)
@@ -215,6 +252,9 @@ class EvaluatorWorker:
                 raw_response=json.dumps({"prompt": prompt_text}, ensure_ascii=False),
             )
         )
+
+        # 4) 태그 upsert
+        _upsert_tags(session, photo_id, tag_result.tags)
 
         job.state = "done"
         job.finished_at = _utc_now()
@@ -245,6 +285,29 @@ class EvaluatorWorker:
                 if self._dsm_client is None:
                     self._dsm_client = open_dsm_client(session)
         return self._dsm_client
+
+
+def _upsert_tags(session: Session, photo_id: int, tag_items) -> None:
+    """tags 사전에 없으면 추가, photo_tags upsert."""
+    if not tag_items:
+        return
+    # 기존 photo_tags 모두 제거 후 새로 — 단순화
+    session.execute(
+        PhotoTag.__table__.delete().where(PhotoTag.photo_id == photo_id)
+    )
+    for item in tag_items:
+        tag_obj = session.execute(select(Tag).where(Tag.name == item.name)).scalar_one_or_none()
+        if tag_obj is None:
+            tag_obj = Tag(name=item.name, source="ai")
+            session.add(tag_obj)
+            session.flush()
+        session.add(
+            PhotoTag(
+                photo_id=photo_id,
+                tag_id=tag_obj.id,
+                confidence=item.confidence,
+            )
+        )
 
 
 def _upsert_embedding(session: Session, photo_id: int, emb) -> None:

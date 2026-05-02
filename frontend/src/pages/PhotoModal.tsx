@@ -147,6 +147,41 @@ export function PhotoModal({
           {detail && (
             <>
               <h3>사진 정보</h3>
+              {aest?.caption && (
+                <p
+                  style={{
+                    background: "var(--panel)",
+                    padding: 8,
+                    borderRadius: 4,
+                    fontSize: 12,
+                    color: "var(--text)",
+                    margin: "0 0 10px 0",
+                    fontStyle: "italic",
+                  }}
+                >
+                  "{aest.caption}"
+                </p>
+              )}
+              {detail.tags.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 10 }}>
+                  {detail.tags.map((t) => (
+                    <span
+                      key={t.name}
+                      title={`confidence ${t.confidence.toFixed(3)}`}
+                      style={{
+                        background: "var(--panel)",
+                        border: "1px solid var(--border)",
+                        borderRadius: 12,
+                        padding: "2px 8px",
+                        fontSize: 10,
+                        color: "var(--text-dim)",
+                      }}
+                    >
+                      {t.name}
+                    </span>
+                  ))}
+                </div>
+              )}
               <dl>
                 <dt>미학 점수</dt>
                 <dd>

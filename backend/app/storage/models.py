@@ -175,6 +175,29 @@ class UserScore(Base):
     updated_at: Mapped[datetime] = mapped_column(default=_utc_now, onupdate=_utc_now)
 
 
+class Tag(Base):
+    """SPEC §2.5 — 태그 사전. AI 추출 또는 사용자 추가."""
+
+    __tablename__ = "tags"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(unique=True, index=True)
+    source: Mapped[str] = mapped_column(default="ai")  # 'ai' | 'user'
+
+
+class PhotoTag(Base):
+    __tablename__ = "photo_tags"
+
+    photo_id: Mapped[int] = mapped_column(
+        ForeignKey("photos.id", ondelete="CASCADE"), primary_key=True
+    )
+    tag_id: Mapped[int] = mapped_column(
+        ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True
+    )
+    confidence: Mapped[float | None] = mapped_column(default=None)
+    created_at: Mapped[datetime] = mapped_column(default=_utc_now)
+
+
 class Portfolio(Base):
     __tablename__ = "portfolios"
 
