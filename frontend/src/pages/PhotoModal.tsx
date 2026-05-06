@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type AdvancedReview, type PhotoDetail } from "../api";
+import { api, type AdvancedReview, type ExternalModel, type PhotoDetail } from "../api";
 
 export function PhotoModal({
   photoId,
@@ -61,24 +61,16 @@ export function PhotoModal({
 
   const deleteSelectedPaths = async () => {
     if (!detail || selectedPaths.size === 0) return;
-    const localCount = detail.paths.filter(
-      (p) => p.nas_id === "local" && selectedPaths.has(p.id),
-    ).length;
-    let alsoFiles = false;
-    if (localCount > 0) {
-      alsoFiles = window.confirm(
+    if (
+      !window.confirm(
         `${selectedPaths.size}개 경로를 라이브러리에서 제거합니다.\n` +
-          `로컬 경로 ${localCount}개의 디스크 원본 파일도 삭제할까요?\n` +
-          "확인 = 로컬 원본 삭제 / 취소 = DB 레코드만 삭제",
-      );
-    } else if (
-      !window.confirm(`${selectedPaths.size}개 경로를 라이브러리에서 제거합니다.`)
-    ) {
+          "원본 파일(로컬·NAS)은 보존됩니다.",
+      )
+    )
       return;
-    }
     setBusy(true);
     try {
-      const r = await api.photos.deletePaths(detail.id, [...selectedPaths], alsoFiles);
+      const r = await api.photos.deletePaths(detail.id, [...selectedPaths]);
       setSelectedPaths(new Set());
       if (r.remaining_paths === 0) {
         alert("모든 경로 제거됨 — 사진은 missing 상태가 되었습니다.");
@@ -96,17 +88,13 @@ export function PhotoModal({
     if (
       !window.confirm(
         "이 사진을 라이브러리에서 완전히 삭제할까요?\n" +
-          "(DB 레코드, 평가, 임베딩, 썸네일 캐시 모두 삭제. 디스크 원본은 보존)",
+          "DB 레코드(평가/임베딩/썸네일/태그/포트폴리오 항목)만 삭제 — 원본 파일은 보존됩니다.",
       )
     )
       return;
-    const alsoFiles = window.confirm(
-      "추가로 로컬 디스크의 원본 파일도 삭제할까요?\n" +
-        "확인 = 로컬 원본 삭제 / 취소 = DB만 삭제",
-    );
     setBusy(true);
     try {
-      await api.photos.bulkDelete([detail.id], alsoFiles);
+      await api.photos.bulkDelete([detail.id]);
       onClose();
     } finally {
       setBusy(false);
@@ -412,6 +400,7 @@ function AdvancedReviewDialog({
   const [prompt, setPrompt] = useState("");
   const [defaultPrompt, setDefaultPrompt] = useState("");
   const [model, setModel] = useState("claude-sonnet-4-6");
+  const [models, setModels] = useState<ExternalModel[]>([]);
   const [costEstimate, setCostEstimate] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -423,6 +412,7 @@ function AdvancedReviewDialog({
       setDefaultPrompt(s.default_advanced_prompt);
       setModel(s.external_default_model);
     });
+    void api.advanced.models().then((r) => setModels(r.models)).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -464,9 +454,15 @@ function AdvancedReviewDialog({
 
         <label style={{ color: "var(--text-dim)", fontSize: 12, marginBottom: 4 }}>모델</label>
         <select value={model} onChange={(e) => setModel(e.target.value)} disabled={busy}>
-          <option value="claude-haiku-4-5">claude-haiku-4-5 (저렴)</option>
-          <option value="claude-sonnet-4-6">claude-sonnet-4-6 (균형)</option>
-          <option value="claude-opus-4-7">claude-opus-4-7 (최고)</option>
+          {models.length === 0 ? (
+            <option value={model}>{model}</option>
+          ) : (
+            models.map((m) => (
+              <option key={m.id} value={m.id}>
+                [{m.provider}] {m.id} (${m.input_price_per_million}/M in, ${m.output_price_per_million}/M out)
+              </option>
+            ))
+          )}
         </select>
 
         <label style={{ color: "var(--text-dim)", fontSize: 12, marginTop: 12, marginBottom: 4 }}>

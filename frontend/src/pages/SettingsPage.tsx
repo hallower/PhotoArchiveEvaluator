@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { api, type AppSettings, type BackupRecord, type ScanJob } from "../api";
+import {
+  api,
+  type AppSettings,
+  type BackupRecord,
+  type ExternalModel,
+  type ScanJob,
+} from "../api";
 
 export function SettingsPage({ onClose }: { onClose: () => void }) {
   const [s, setS] = useState<AppSettings | null>(null);
@@ -8,6 +14,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
   const [info, setInfo] = useState<string | null>(null);
   const [backups, setBackups] = useState<BackupRecord[]>([]);
   const [failedJobs, setFailedJobs] = useState<ScanJob[]>([]);
+  const [models, setModels] = useState<ExternalModel[]>([]);
 
   const loadFailed = () =>
     api.scan
@@ -18,6 +25,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     void api.settings.get().then(setS);
     void api.backup.list().then(setBackups).catch(() => {});
+    void api.advanced.models().then((r) => setModels(r.models)).catch(() => {});
     void loadFailed();
   }, []);
 
@@ -322,21 +330,39 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
             <select
               value={s.external_default_model}
               onChange={(e) => update({ external_default_model: e.target.value })}
+              style={{ width: 280 }}
             >
-              <option value="claude-haiku-4-5">claude-haiku-4-5 (저렴)</option>
-              <option value="claude-sonnet-4-6">claude-sonnet-4-6 (균형)</option>
-              <option value="claude-opus-4-7">claude-opus-4-7 (최고)</option>
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  [{m.provider}] {m.id} (in ${m.input_price_per_million}/M, out ${m.output_price_per_million}/M)
+                </option>
+              ))}
             </select>
           </div>
 
-          <ApiKeyEditor
-            provider="anthropic"
-            label="Anthropic API 키"
-            isSet={s.configured_api_providers.includes("anthropic")}
-            onChange={() =>
-              api.settings.get().then(setS)
-            }
-          />
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 8 }}>
+            <ApiKeyEditor
+              provider="anthropic"
+              label="Anthropic API 키"
+              isSet={s.configured_api_providers.includes("anthropic")}
+              placeholder="sk-ant-..."
+              onChange={() => api.settings.get().then(setS)}
+            />
+            <ApiKeyEditor
+              provider="openai"
+              label="OpenAI API 키"
+              isSet={s.configured_api_providers.includes("openai")}
+              placeholder="sk-..."
+              onChange={() => api.settings.get().then(setS)}
+            />
+            <ApiKeyEditor
+              provider="google"
+              label="Google Gemini API 키"
+              isSet={s.configured_api_providers.includes("google")}
+              placeholder="AIza..."
+              onChange={() => api.settings.get().then(setS)}
+            />
+          </div>
         </Section>
 
         <Section title="DB 백업">
@@ -439,11 +465,13 @@ function ApiKeyEditor({
   label,
   isSet,
   onChange,
+  placeholder,
 }: {
   provider: string;
   label: string;
   isSet: boolean;
   onChange: () => void;
+  placeholder?: string;
 }) {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -480,7 +508,7 @@ function ApiKeyEditor({
           type="password"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder={isSet ? "(저장됨 — 새 키로 교체하려면 입력)" : "sk-ant-..."}
+          placeholder={isSet ? "(저장됨 — 새 키로 교체하려면 입력)" : (placeholder ?? "")}
           style={{ flex: 1 }}
           autoComplete="off"
         />

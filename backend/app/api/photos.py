@@ -337,37 +337,16 @@ class _UserScoreIn(BaseModel):
 
 class _BulkDeleteIn(BaseModel):
     ids: list[int] = Field(default_factory=list)
-    delete_local_files: bool = False  # 로컬 파일 실제 삭제 여부 (NAS는 무시)
 
 
 @router.delete("", status_code=status.HTTP_200_OK)
 def bulk_delete(body: _BulkDeleteIn, session: Session = Depends(get_session)) -> dict:
-    """photos를 다중 삭제. 기본은 DB 레코드만 (cascade로 paths/eval/embedding 동반).
+    """photos를 다중 삭제. **DB 레코드만** 삭제 (paths/eval/embedding/thumbs cascade).
 
-    delete_local_files=True면 로컬 디스크 원본도 삭제 (DSM 경로는 안전상 항상 무시).
+    원본 파일(로컬·NAS)은 절대 삭제하지 않는다 — 사용자 정책.
     """
     if not body.ids:
-        return {"deleted": 0, "files_deleted": 0}
-
-    files_deleted = 0
-    files_failed = 0
-    if body.delete_local_files:
-        rows = session.execute(
-            select(PhotoPath.path)
-            .where(
-                PhotoPath.photo_id.in_(body.ids),
-                PhotoPath.nas_id == "local",
-            )
-        ).all()
-        for (path_str,) in rows:
-            try:
-                p = Path(path_str)
-                if p.is_file():
-                    p.unlink()
-                    files_deleted += 1
-            except OSError as exc:
-                log.warning("file delete failed %s: %s", path_str, exc)
-                files_failed += 1
+        return {"deleted": 0}
 
     deleted = session.execute(
         Photo.__table__.delete().where(Photo.id.in_(body.ids))
@@ -384,16 +363,11 @@ def bulk_delete(body: _BulkDeleteIn, session: Session = Depends(get_session)) ->
                 except OSError:
                     pass
 
-    return {
-        "deleted": int(deleted),
-        "files_deleted": files_deleted,
-        "files_failed": files_failed,
-    }
+    return {"deleted": int(deleted)}
 
 
 class _PathDeleteIn(BaseModel):
     path_ids: list[int] = Field(default_factory=list)
-    delete_local_files: bool = False
 
 
 @router.delete("/{photo_id}/paths", status_code=status.HTTP_200_OK)
@@ -402,36 +376,22 @@ def delete_paths(
     body: _PathDeleteIn,
     session: Session = Depends(get_session),
 ) -> dict:
-    """특정 photo_paths 행을 삭제. delete_local_files=True면 로컬 파일도 삭제.
+    """photo_paths 행을 삭제 (DB만 — 원본 파일은 절대 보존).
 
     photo의 모든 path가 사라지면 photo.state='missing'으로 표시.
     """
     if not body.path_ids:
-        return {"deleted": 0, "files_deleted": 0}
+        return {"deleted": 0}
 
     rows = session.execute(
         select(PhotoPath)
         .where(PhotoPath.photo_id == photo_id, PhotoPath.id.in_(body.path_ids))
     ).scalars().all()
 
-    files_deleted = 0
-    if body.delete_local_files:
-        for pp in rows:
-            if pp.nas_id != "local":
-                continue
-            try:
-                p = Path(pp.path)
-                if p.is_file():
-                    p.unlink()
-                    files_deleted += 1
-            except OSError as exc:
-                log.warning("file delete failed %s: %s", pp.path, exc)
-
     for pp in rows:
         session.delete(pp)
     session.commit()
 
-    # photo의 남은 path 수 확인
     remaining = session.execute(
         select(func.count(PhotoPath.id)).where(PhotoPath.photo_id == photo_id)
     ).scalar() or 0
@@ -443,7 +403,6 @@ def delete_paths(
 
     return {
         "deleted": len(rows),
-        "files_deleted": files_deleted,
         "remaining_paths": int(remaining),
     }
 

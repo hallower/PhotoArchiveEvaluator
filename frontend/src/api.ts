@@ -63,6 +63,7 @@ export interface AdvancedReview {
 
 export interface ExternalModel {
   id: string;
+  provider: string;
   input_price_per_million: number;
   output_price_per_million: number;
 }
@@ -237,17 +238,13 @@ export const api = {
       return request<PhotoListResponse>("GET", `/api/photos?${qs.toString()}`);
     },
     detail: (id: number) => request<PhotoDetail>("GET", `/api/photos/${id}`),
-    bulkDelete: (ids: number[], delete_local_files = false) =>
-      request<{ deleted: number; files_deleted: number; files_failed: number }>(
-        "DELETE",
-        "/api/photos",
-        { ids, delete_local_files },
-      ),
-    deletePaths: (photo_id: number, path_ids: number[], delete_local_files = false) =>
-      request<{ deleted: number; files_deleted: number; remaining_paths: number }>(
+    bulkDelete: (ids: number[]) =>
+      request<{ deleted: number }>("DELETE", "/api/photos", { ids }),
+    deletePaths: (photo_id: number, path_ids: number[]) =>
+      request<{ deleted: number; remaining_paths: number }>(
         "DELETE",
         `/api/photos/${photo_id}/paths`,
-        { path_ids, delete_local_files },
+        { path_ids },
       ),
     setUserScore: (id: number, score: number, note?: string) =>
       request<void>("PUT", `/api/photos/${id}/score`, { score, note: note ?? null }),

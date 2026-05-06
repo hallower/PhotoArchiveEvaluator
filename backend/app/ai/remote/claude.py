@@ -17,15 +17,9 @@ import base64
 import logging
 
 from ..base import AdvancedReviewModel, ReviewResult
+from .registry import get_price
 
 log = logging.getLogger(__name__)
-
-# USD per 1M tokens — input, output (대략적인 값. 실제는 운영 시점 가격 확인)
-PRICING: dict[str, tuple[float, float]] = {
-    "claude-opus-4-7": (15.0, 75.0),
-    "claude-sonnet-4-6": (3.0, 15.0),
-    "claude-haiku-4-5": (0.80, 4.0),
-}
 
 DEFAULT_MAX_OUTPUT = 1024
 
@@ -83,5 +77,5 @@ class ClaudeVisionReview(AdvancedReviewModel):
         return self._calc_cost(in_tokens, max_output_tokens)
 
     def _calc_cost(self, tokens_in: int, tokens_out: int) -> float:
-        in_p, out_p = PRICING.get(self._model, PRICING["claude-sonnet-4-6"])
+        in_p, out_p = get_price(self._model)
         return (tokens_in * in_p + tokens_out * out_p) / 1_000_000

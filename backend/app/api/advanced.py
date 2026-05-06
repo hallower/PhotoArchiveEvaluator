@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from ..ai.exif_strip import strip_exif_jpeg
 from ..ai.remote import keys as api_keys
-from ..ai.remote.claude import PRICING, ClaudeVisionReview
+from ..ai.remote.registry import MODELS, get_provider, make_adapter
 from ..auth.dependencies import require_auth
 from ..nas.session import open_dsm_client
 from ..settings_store import (
@@ -81,11 +81,16 @@ def advanced_review(
             "external API send is disabled — enable in Settings → 외부 전송 동의",
         )
 
-    api_key = api_keys.get("anthropic")
+    model = body.model or get_external_default_model(session)
+    if model not in MODELS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"unsupported model: {model}")
+
+    provider = get_provider(model) or "anthropic"
+    api_key = api_keys.get(provider)
     if not api_key:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "Anthropic API key not set — Settings → 외부 API 키",
+            f"{provider} API key not set — Settings → 외부 API 키",
         )
 
     photo = session.get(Photo, photo_id)
@@ -106,15 +111,12 @@ def advanced_review(
         content = strip_exif_jpeg(content)
 
     prompt = (body.prompt or DEFAULT_ADVANCED_PROMPT).strip() or DEFAULT_ADVANCED_PROMPT
-    model = body.model or get_external_default_model(session)
-    if model not in PRICING:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"unsupported model: {model}")
 
     try:
-        client = ClaudeVisionReview(api_key=api_key, model=model)
+        client = make_adapter(model, api_key)
         result = client.review(content, prompt)
     except Exception as exc:  # noqa: BLE001
-        log.exception("claude review failed")
+        log.exception("advanced review failed (%s)", model)
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"API call failed: {exc}") from exc
 
     # 저장
@@ -201,17 +203,15 @@ def cost_preview(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "photo not found")
 
     chosen_model = model or get_external_default_model(session)
-    if chosen_model not in PRICING:
+    if chosen_model not in MODELS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"unsupported model: {chosen_model}")
 
     width = photo.width or 1024
     height = photo.height or 768
-    # api_key 없이 dummy 인스턴스로 추정만
-    dummy = ClaudeVisionReview.__new__(ClaudeVisionReview)
-    dummy._model = chosen_model
-    dummy._client = None  # type: ignore[assignment]
-    dummy.model_id = f"claude:{chosen_model}"
-    cost = dummy.estimate_cost(width, height)
+    # registry로 provider별 어댑터를 받아 estimate_cost만 사용 (네트워크 호출 없음).
+    # API key 없이도 estimate_cost가 동작해야 하므로 어댑터를 직접 구성하는 대신
+    # provider별 정적 추정 사용.
+    cost = _estimate_cost_no_call(chosen_model, width, height)
     return {
         "model": chosen_model,
         "cost_usd_estimate": round(cost, 5),
@@ -220,11 +220,35 @@ def cost_preview(
     }
 
 
+def _estimate_cost_no_call(model: str, width: int, height: int, max_out: int = 1024) -> float:
+    """API 키 없이 가격만 사용한 정적 추정. 어댑터별 estimate_cost 로직을 모방."""
+    from ..ai.remote.registry import get_price
+
+    in_p, out_p = get_price(model)
+    if model.startswith("claude"):
+        image_tokens = max(1, (width * height) // 750)
+    elif model.startswith("gpt"):
+        image_tokens = max(85, (width * height) // 1500)
+    elif model.startswith("gemini"):
+        tiles_w = max(1, width // 768) + 1
+        tiles_h = max(1, height // 768) + 1
+        image_tokens = tiles_w * tiles_h * 258
+    else:
+        image_tokens = max(1, (width * height) // 750)
+    in_tokens = image_tokens + 100
+    return (in_tokens * in_p + max_out * out_p) / 1_000_000
+
+
 @router.get("/api/advanced/models")
 def list_models() -> dict:
     return {
         "models": [
-            {"id": m, "input_price_per_million": p[0], "output_price_per_million": p[1]}
-            for m, p in PRICING.items()
+            {
+                "id": m,
+                "provider": info.provider,
+                "input_price_per_million": info.input_price,
+                "output_price_per_million": info.output_price,
+            }
+            for m, info in MODELS.items()
         ],
     }

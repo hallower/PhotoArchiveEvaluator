@@ -188,22 +188,17 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
 
   const bulkDelete = async () => {
     if (selected.size === 0) return;
-    const deleteFiles = window.confirm(
-      `${selected.size}개 사진을 라이브러리에서 삭제합니다.\n\n` +
-        "확인을 누르면: DB 레코드 + 썸네일 캐시 삭제 (NAS/디스크 원본 보존)\n" +
-        "취소를 누르면 작업 중단",
-    );
-    if (!deleteFiles) return;
-    const alsoFiles = window.confirm(
-      "추가로 로컬 디스크의 원본 파일까지 삭제할까요?\n" +
-        "확인 = 로컬 원본 파일 삭제 (NAS는 항상 보존)\n" +
-        "취소 = DB만 삭제",
-    );
+    if (
+      !window.confirm(
+        `${selected.size}개 사진을 라이브러리에서 삭제합니다.\n\n` +
+          "DB 레코드 + 썸네일 캐시만 삭제됩니다 (원본 파일은 보존).\n" +
+          "이 사진들이 다음 스캔에서 다시 등록될 수 있습니다.",
+      )
+    )
+      return;
     try {
-      const r = await api.photos.bulkDelete([...selected], alsoFiles);
-      alert(
-        `삭제됨: ${r.deleted}장${alsoFiles ? `, 파일 삭제: ${r.files_deleted}` : ""}`,
-      );
+      const r = await api.photos.bulkDelete([...selected]);
+      alert(`삭제됨: ${r.deleted}장 (원본 보존)`);
       clearSelection();
       void fetchList();
     } catch (e) {

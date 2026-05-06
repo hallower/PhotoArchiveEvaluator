@@ -28,6 +28,8 @@ dependencies = [
     "keyring>=25.0",
     "imagehash>=4.3",
     "anthropic>=0.40",
+    "openai>=1.50",
+    "google-genai>=1.0",
 ]
 
 [project.optional-dependencies]

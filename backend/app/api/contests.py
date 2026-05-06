@@ -29,6 +29,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..ai.remote import keys as api_keys
+from ..ai.remote.registry import MODELS, get_provider
 from ..auth.dependencies import require_auth
 from ..settings_store import (
     get_external_allow_send,
@@ -217,22 +218,26 @@ def get_matches(
 
 @router.post("/analyze")
 def analyze(body: _AnalyzeIn, session: Session = Depends(get_session)) -> dict:
-    """info_text → Claude로 5–10개 테마 추출."""
+    """info_text → 외부 LLM(Claude/GPT/Gemini)으로 5–10개 테마 추출.
+
+    설정의 default_model에 따라 provider 자동 분기. provider 키가 등록되어 있어야 함.
+    """
     if not get_external_allow_send(session):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "external API send is disabled — enable in Settings",
         )
-    api_key = api_keys.get("anthropic")
-    if not api_key:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "Anthropic API key not set"
-        )
-
-    from anthropic import Anthropic
 
     model = get_external_default_model(session)
-    client = Anthropic(api_key=api_key)
+    if model not in MODELS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"unsupported model: {model}")
+    provider = get_provider(model) or "anthropic"
+    api_key = api_keys.get(provider)
+    if not api_key:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, f"{provider} API key not set"
+        )
+
     prompt = (
         "From the following photography contest information, extract 5–10 "
         "distinct photographic themes as short ENGLISH phrases (3–8 words each), "
@@ -242,19 +247,15 @@ def analyze(body: _AnalyzeIn, session: Session = Depends(get_session)) -> dict:
         "no numbering, no markdown bullets.\n\n"
         f"Contest information:\n{body.info_text}"
     )
+
     try:
-        msg = client.messages.create(
-            model=model,
-            max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        text, tokens_in, tokens_out = _call_text_llm(provider, model, api_key, prompt)
     except Exception as exc:  # noqa: BLE001
         log.exception("contest analyze failed")
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY, f"AI call failed: {exc}"
         ) from exc
 
-    text = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
     themes: list[str] = []
     for line in text.splitlines():
         s = line.strip().lstrip("-*•·").strip()
@@ -263,10 +264,59 @@ def analyze(body: _AnalyzeIn, session: Session = Depends(get_session)) -> dict:
     themes = themes[:12]
     return {
         "themes": themes,
-        "model": f"claude:{model}",
-        "tokens_in": getattr(msg.usage, "input_tokens", None),
-        "tokens_out": getattr(msg.usage, "output_tokens", None),
+        "model": f"{provider}:{model}",
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
     }
+
+
+def _call_text_llm(
+    provider: str, model: str, api_key: str, prompt: str
+) -> tuple[str, int | None, int | None]:
+    """텍스트 only 호출. provider별 SDK 분기."""
+    if provider == "anthropic":
+        from anthropic import Anthropic
+
+        client = Anthropic(api_key=api_key)
+        msg = client.messages.create(
+            model=model,
+            max_tokens=512,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
+        return text, getattr(msg.usage, "input_tokens", None), getattr(msg.usage, "output_tokens", None)
+
+    if provider == "openai":
+        from openai import OpenAI
+
+        client = OpenAI(api_key=api_key)
+        resp = client.chat.completions.create(
+            model=model,
+            max_tokens=512,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.choices[0].message.content or ""
+        usage = resp.usage
+        return text, getattr(usage, "prompt_tokens", None), getattr(usage, "completion_tokens", None)
+
+    if provider == "google":
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model=model,
+            contents=[prompt],
+            config=types.GenerateContentConfig(max_output_tokens=512),
+        )
+        usage = response.usage_metadata
+        return (
+            response.text or "",
+            getattr(usage, "prompt_token_count", None),
+            getattr(usage, "candidates_token_count", None),
+        )
+
+    raise ValueError(f"unsupported provider: {provider}")
 
 
 @router.post("/{contest_id}/portfolio", status_code=status.HTTP_201_CREATED)
