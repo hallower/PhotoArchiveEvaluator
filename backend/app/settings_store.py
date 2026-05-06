@@ -28,7 +28,7 @@ DEFAULT_EVAL_PROMPT = (
     "balanced lighting, mood, and emotional impact, suitable for "
     "a photography portfolio or contest"
 )
-DEFAULT_MIN_SCORE = 4.0
+DEFAULT_MIN_SCORE = 80.0  # 0-100 스케일. raw 6.2 ≈ 80 (strong photo)
 DEFAULT_MAX_WORKERS = 2  # GPU 1개 + 다운로드 오버랩 가정 시 2가 sweet spot
 MAX_ALLOWED_WORKERS = 6
 DEFAULT_ADVANCED_PROMPT = (

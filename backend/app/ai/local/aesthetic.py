@@ -3,15 +3,15 @@
 upstream: https://github.com/discus0434/aesthetic-predictor-v2-5
 
 모델 raw 출력은 명목상 1–10 스케일이지만, 실제 사진 라이브러리에서는
-대부분 3–8 범위에 분포한다(PoC 측정). SPEC의 1–5점에 매핑하기 위해
-`raw - 2`로 시프트한 뒤 [1, 5]로 클램프한다.
+대부분 3–8 범위에 분포한다(PoC 측정). 0–100점 스케일에 매핑하기 위해
+`(raw - 3) * 25`로 변환한 뒤 [0, 100]으로 클램프한다.
 
 대응 의미:
-  raw  3 → 1점 (poor)
-  raw  4 → 2점 (mediocre)
-  raw  5 → 3점 (decent)
-  raw  6 → 4점 (strong, contest-worthy)
-  raw  7 → 5점 (excellent, portfolio-worthy)
+  raw 3 → 0점 (poor)
+  raw 4 → 25점 (mediocre)
+  raw 5 → 50점 (decent)
+  raw 6 → 75점 (strong, contest-worthy)
+  raw 7 → 100점 (excellent, portfolio-worthy)
 
 raw_score는 항상 보존하므로 추후 사용자 라이브러리에 맞춘 재캘리브레이션이
 가능하다(percentile 기반 등).
@@ -65,7 +65,7 @@ class AestheticV25:
         with torch.inference_mode():
             raw = self._model(pixel_values).logits.squeeze().float().cpu().item()
 
-        normalized = max(1.0, min(5.0, raw - 2.0))
+        normalized = max(0.0, min(100.0, (raw - 3.0) * 25.0))
 
         return ScoreResult(
             score=normalized,

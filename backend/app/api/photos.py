@@ -56,7 +56,7 @@ def list_photos(
     session: Session = Depends(get_session),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    min_score: float | None = Query(4.0),
+    min_score: float | None = Query(80.0),
     max_score: float | None = Query(None),
     camera: str | None = None,
     q: str | None = Query(None, description="키워드: camera/lens/path 부분 일치"),
@@ -181,6 +181,59 @@ def list_photos(
         for r in rows
     ]
     return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/score-distribution")
+def score_distribution(
+    bins: int = Query(20, ge=5, le=50, description="히스토그램 구간 수"),
+    session: Session = Depends(get_session),
+) -> dict:
+    """라이브러리의 final_score(=user_score ?? aesthetic ai_score) 분포.
+
+    설정 페이지의 임계값 선택을 돕기 위한 히스토그램 데이터. 0–100 스케일 기준.
+    """
+    aest_sub = (
+        select(Evaluation.photo_id, func.max(Evaluation.id).label("eval_id"))
+        .where(Evaluation.model_id != "clip-prompt")
+        .group_by(Evaluation.photo_id)
+        .subquery()
+    )
+    e = aliased(Evaluation)
+    final_score = func.coalesce(UserScore.score, e.ai_score)
+
+    rows = session.execute(
+        select(final_score)
+        .select_from(Photo)
+        .outerjoin(aest_sub, aest_sub.c.photo_id == Photo.id)
+        .outerjoin(e, e.id == aest_sub.c.eval_id)
+        .outerjoin(UserScore, UserScore.photo_id == Photo.id)
+        .where(Photo.state == "active")
+    ).all()
+
+    scores = [float(r[0]) for r in rows if r[0] is not None]
+    bin_edges = [round(i * 100.0 / bins, 4) for i in range(bins + 1)]
+    counts = [0] * bins
+    for s in scores:
+        if s < 0:
+            idx = 0
+        elif s >= 100:
+            idx = bins - 1
+        else:
+            idx = int(s * bins / 100.0)
+            if idx >= bins:
+                idx = bins - 1
+        counts[idx] += 1
+
+    return {
+        "bins": bins,
+        "edges": bin_edges,
+        "counts": counts,
+        "total": len(scores),
+        "unscored": sum(1 for r in rows if r[0] is None),
+        "min": min(scores) if scores else None,
+        "max": max(scores) if scores else None,
+        "mean": (sum(scores) / len(scores)) if scores else None,
+    }
 
 
 @router.get("/search")
@@ -331,7 +384,7 @@ def get_photo(photo_id: int, session: Session = Depends(get_session)) -> dict:
 
 
 class _UserScoreIn(BaseModel):
-    score: float = Field(ge=1.0, le=5.0)
+    score: float = Field(ge=0.0, le=100.0)
     note: str | None = None
 
 

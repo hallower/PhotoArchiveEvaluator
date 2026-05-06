@@ -19,7 +19,7 @@ const SORT_OPTIONS = [
 export function LibraryPage({ onLogout }: { onLogout: () => void }) {
   const [photos, setPhotos] = useState<PhotoSummary[]>([]);
   const [total, setTotal] = useState(0);
-  const [minScore, setMinScore] = useState<number>(4.0);
+  const [minScore, setMinScore] = useState<number>(80.0);
   const [sort, setSort] = useState<string>("-score");
   const [loading, setLoading] = useState(false);
   const [openPhotoId, setOpenPhotoId] = useState<number | null>(null);
@@ -314,11 +314,12 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
             disabled={searchActive}
           >
             <option value="0">전체</option>
-            <option value="3">3 이상</option>
-            <option value="3.5">3.5 이상</option>
-            <option value="4">4 이상 (기본)</option>
-            <option value="4.5">4.5 이상</option>
-            <option value="5">5만</option>
+            <option value="40">40 이상</option>
+            <option value="60">60 이상</option>
+            <option value="70">70 이상</option>
+            <option value="80">80 이상 (기본)</option>
+            <option value="90">90 이상</option>
+            <option value="95">95 이상</option>
           </select>
         </label>
         <label>
@@ -471,7 +472,9 @@ function Card({
 
   const scoreClass = useMemo(() => {
     if (displayScore === null || displayScore === undefined) return "score-1";
-    return `score-${Math.max(1, Math.min(5, Math.round(displayScore)))}`;
+    // 0-100 → 5단계 색상 빈: 0-19=1, 20-39=2, 40-59=3, 60-79=4, 80-100=5
+    const bin = Math.max(1, Math.min(5, Math.floor(displayScore / 20) + 1));
+    return `score-${bin}`;
   }, [displayScore]);
 
   return (
@@ -514,6 +517,7 @@ function Card({
         >
           {userOverride ? "★ " : ""}
           {displayScore.toFixed(1)}
+          <span style={{ opacity: 0.7, fontSize: "0.85em" }}>/100</span>
         </div>
       )}
       <div className="info">

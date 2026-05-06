@@ -170,7 +170,7 @@ class UserScore(Base):
     photo_id: Mapped[int] = mapped_column(
         ForeignKey("photos.id", ondelete="CASCADE"), primary_key=True
     )
-    score: Mapped[float]  # 1.0 - 5.0
+    score: Mapped[float]  # 0.0 - 100.0
     note: Mapped[str | None] = mapped_column(Text, default=None)
     updated_at: Mapped[datetime] = mapped_column(default=_utc_now, onupdate=_utc_now)
 

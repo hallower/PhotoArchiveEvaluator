@@ -16,9 +16,12 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
   const [failedJobs, setFailedJobs] = useState<ScanJob[]>([]);
   const [models, setModels] = useState<ExternalModel[]>([]);
   const [scannedPaths, setScannedPaths] = useState<{
-    local: { path: string; photo_count: number }[];
-    dsm: { path: string; photo_count: number }[];
+    local: { nas_id: string; path: string; photo_count: number }[];
+    dsm: { nas_id: string; path: string; photo_count: number }[];
   }>({ local: [], dsm: [] });
+
+  const reloadScannedPaths = () =>
+    api.settings.scannedPaths().then(setScannedPaths).catch(() => {});
 
   const loadFailed = () =>
     api.scan
@@ -30,7 +33,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
     void api.settings.get().then(setS);
     void api.backup.list().then(setBackups).catch(() => {});
     void api.advanced.models().then((r) => setModels(r.models)).catch(() => {});
-    void api.settings.scannedPaths().then(setScannedPaths).catch(() => {});
+    void reloadScannedPaths();
     void loadFailed();
   }, []);
 
@@ -166,19 +169,42 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
 
         <Section title="라이브러리">
           <label style={{ color: "var(--text-dim)", fontSize: 12 }}>
-            기본 표시 임계값 (라이브러리 첫 진입 시)
+            기본 표시 임계값 (0–100, 소수점 3자리). 라이브러리에서 이 점수 이상만 표시.
           </label>
-          <input
-            type="number"
-            min={0}
-            max={5}
-            step={0.1}
-            value={s.library_min_score}
-            onChange={(e) =>
-              update({ library_min_score: parseFloat(e.target.value) || 0 })
-            }
-            style={{ width: 120 }}
-          />
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              step={0.001}
+              value={s.library_min_score}
+              onChange={(e) =>
+                update({
+                  library_min_score: clamp(
+                    parseFloat(e.target.value) || 0,
+                    0,
+                    100,
+                  ),
+                })
+              }
+              style={{ width: 120 }}
+            />
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={s.library_min_score}
+              onChange={(e) =>
+                update({ library_min_score: parseFloat(e.target.value) })
+              }
+              style={{ flex: 1 }}
+            />
+            <span style={{ color: "var(--text-dim)", fontSize: 11, minWidth: 80 }}>
+              기본 {s.default_library_min_score}
+            </span>
+          </div>
+          <ScoreDistributionChart threshold={s.library_min_score} />
         </Section>
 
         <Section title="동시 평가 워커 수">
@@ -206,7 +232,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
 
         <Section title="평가 prompt">
           <p style={{ color: "var(--text-dim)", fontSize: 12, margin: "0 0 8px 0" }}>
-            CLIP이 이 prompt와 사진을 비교해 1–5점을 부여합니다. 영어로 쓰는 게
+            CLIP이 이 prompt와 사진을 비교해 0–100점을 부여합니다. 영어로 쓰는 게
             정확합니다. 저장 시 기존 임베딩으로 즉시 재평가됩니다.
           </p>
           <textarea
@@ -229,7 +255,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
           <p style={{ color: "var(--text-dim)", fontSize: 12, margin: "0 0 8px 0" }}>
             현재 라이브러리 사진의 로컬 부모 폴더 자동 도출. 새 폴더는 헤더의 "로컬 스캔" 버튼으로 추가.
           </p>
-          <ScannedList items={scannedPaths.local} />
+          <ScannedList items={scannedPaths.local} onDeleted={reloadScannedPaths} />
         </Section>
 
         <Section title={`NAS (DSM) 스캔된 폴더 (${scannedPaths.dsm.length})`}>
@@ -237,7 +263,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
             현재 라이브러리 사진의 NAS 부모 폴더 자동 도출. 새 폴더는 헤더의 "NAS 스캔" 버튼으로 추가.
             "저장된 폴더 모두 스캔"은 이 폴더들의 최상위 조상만 walk (중복 제거).
           </p>
-          <ScannedList items={scannedPaths.dsm} />
+          <ScannedList items={scannedPaths.dsm} onDeleted={reloadScannedPaths} />
         </Section>
 
         <Section title={`실패한 스캔 (${failedJobs.length})`}>
@@ -464,9 +490,40 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function ScannedList({
   items,
+  onDeleted,
 }: {
-  items: { path: string; photo_count: number }[];
+  items: { nas_id: string; path: string; photo_count: number }[];
+  onDeleted: () => void;
 }) {
+  const [busyPath, setBusyPath] = useState<string | null>(null);
+
+  const remove = async (
+    nasId: string,
+    path: string,
+    photoCount: number,
+  ) => {
+    if (
+      !window.confirm(
+        `"${path}" 폴더의 사진 ${photoCount}장을 라이브러리에서 제거합니다.\n\n` +
+          "DB 레코드(평가/임베딩/썸네일/태그/포트폴리오 항목)만 삭제 — 원본 파일은 보존됩니다.\n" +
+          "다음 스캔에서 이 폴더가 다시 등록될 수 있습니다.",
+      )
+    )
+      return;
+    setBusyPath(path);
+    try {
+      const r = await api.settings.deleteScannedFolder(nasId, path);
+      onDeleted();
+      window.alert(
+        `삭제됨: 경로 ${r.deleted_paths}개 · 사진 ${r.deleted_photos}장 (원본 보존)`,
+      );
+    } catch (e) {
+      window.alert(`실패: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setBusyPath(null);
+    }
+  };
+
   if (items.length === 0) {
     return (
       <div style={{ color: "var(--text-dim)", fontSize: 12 }}>
@@ -485,24 +542,43 @@ function ScannedList({
         overflowY: "auto",
       }}
     >
-      {items.map((it) => (
-        <div
-          key={it.path}
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            gap: 8,
-            padding: "6px 10px",
-            background: "var(--panel)",
-            borderRadius: 4,
-          }}
-        >
-          <span style={{ flex: 1, wordBreak: "break-all" }}>{it.path}</span>
-          <span style={{ color: "var(--text-dim)", whiteSpace: "nowrap" }}>
-            {it.photo_count}장
-          </span>
-        </div>
-      ))}
+      {items.map((it) => {
+        const busy = busyPath === it.path;
+        return (
+          <div
+            key={it.path}
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 8,
+              padding: "6px 10px",
+              background: "var(--panel)",
+              borderRadius: 4,
+              alignItems: "center",
+              opacity: busy ? 0.5 : 1,
+            }}
+          >
+            <span style={{ flex: 1, wordBreak: "break-all" }}>{it.path}</span>
+            <span style={{ color: "var(--text-dim)", whiteSpace: "nowrap" }}>
+              {it.photo_count}장
+            </span>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => remove(it.nas_id, it.path, it.photo_count)}
+              disabled={busy || busyPath !== null}
+              title="이 폴더의 사진을 라이브러리에서 제거 (원본 파일은 보존)"
+              style={{
+                padding: "2px 8px",
+                fontSize: 10,
+                color: "var(--danger)",
+              }}
+            >
+              {busy ? "삭제 중..." : "삭제"}
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -567,6 +643,164 @@ function ApiKeyEditor({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+function ScoreDistributionChart({ threshold }: { threshold: number }) {
+  const [data, setData] = useState<{
+    edges: number[];
+    counts: number[];
+    total: number;
+    unscored: number;
+    min: number | null;
+    max: number | null;
+    mean: number | null;
+  } | null>(null);
+
+  useEffect(() => {
+    void api.photos
+      .scoreDistribution(20)
+      .then(setData)
+      .catch(() => setData(null));
+  }, []);
+
+  if (!data) {
+    return (
+      <div style={{ marginTop: 10, fontSize: 11, color: "var(--text-dim)" }}>
+        분포 로딩 중...
+      </div>
+    );
+  }
+  if (data.total === 0) {
+    return (
+      <div style={{ marginTop: 10, fontSize: 11, color: "var(--text-dim)" }}>
+        평가된 사진이 없어 분포를 표시할 수 없습니다.
+      </div>
+    );
+  }
+
+  const maxCount = Math.max(...data.counts, 1);
+  const aboveThreshold = data.counts.reduce((acc, c, i) => {
+    const lo = data.edges[i];
+    const hi = data.edges[i + 1];
+    if (lo >= threshold) return acc + c;
+    if (hi <= threshold) return acc;
+    // 부분 구간 — 비례 배분 (근사)
+    const frac = (hi - threshold) / (hi - lo);
+    return acc + Math.round(c * frac);
+  }, 0);
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div
+        style={{
+          fontSize: 11,
+          color: "var(--text-dim)",
+          marginBottom: 4,
+          display: "flex",
+          justifyContent: "space-between",
+        }}
+      >
+        <span>점수 분포 ({data.total}장 평가됨{data.unscored > 0 ? ` · 미평가 ${data.unscored}` : ""})</span>
+        <span>
+          <strong style={{ color: "var(--score-4)" }}>{aboveThreshold}장</strong>{" "}
+          ≥ {threshold.toFixed(1)} (
+          {((aboveThreshold / data.total) * 100).toFixed(1)}%)
+        </span>
+      </div>
+      <div
+        style={{
+          position: "relative",
+          background: "var(--panel)",
+          border: "1px solid var(--border)",
+          borderRadius: 6,
+          padding: "8px 8px 18px 8px",
+          height: 130,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "flex-end",
+            gap: 1,
+            height: "100%",
+          }}
+        >
+          {data.counts.map((c, i) => {
+            const lo = data.edges[i];
+            const hi = data.edges[i + 1];
+            const pct = (c / maxCount) * 100;
+            const bin = Math.max(1, Math.min(5, Math.floor(lo / 20) + 1));
+            const dim = hi <= threshold;
+            return (
+              <div
+                key={i}
+                title={`${lo.toFixed(1)}–${hi.toFixed(1)}: ${c}장`}
+                style={{
+                  flex: 1,
+                  height: `${pct}%`,
+                  minHeight: c > 0 ? 2 : 0,
+                  background: `var(--score-${bin})`,
+                  opacity: dim ? 0.3 : 1,
+                  borderRadius: "2px 2px 0 0",
+                  transition: "opacity 0.15s",
+                }}
+              />
+            );
+          })}
+        </div>
+        {/* 임계값 마커 */}
+        <div
+          style={{
+            position: "absolute",
+            top: 4,
+            bottom: 18,
+            left: `calc(8px + ${(threshold / 100) * 100}% - ${(threshold / 100) * 16}px)`,
+            width: 1,
+            background: "var(--accent)",
+            pointerEvents: "none",
+          }}
+        />
+        {/* x축 라벨 */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            position: "absolute",
+            left: 8,
+            right: 8,
+            bottom: 2,
+            fontSize: 9,
+            color: "var(--text-dim)",
+          }}
+        >
+          <span>0</span>
+          <span>25</span>
+          <span>50</span>
+          <span>75</span>
+          <span>100</span>
+        </div>
+      </div>
+      {data.min !== null && data.max !== null && data.mean !== null && (
+        <div
+          style={{
+            marginTop: 4,
+            fontSize: 10,
+            color: "var(--text-dim)",
+            display: "flex",
+            gap: 12,
+          }}
+        >
+          <span>최저 {data.min.toFixed(2)}</span>
+          <span>평균 {data.mean.toFixed(2)}</span>
+          <span>최고 {data.max.toFixed(2)}</span>
+        </div>
+      )}
     </div>
   );
 }

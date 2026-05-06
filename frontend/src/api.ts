@@ -255,6 +255,17 @@ export const api = {
         items: { id: number; hamming: number; taken_at: string | null; camera_model: string | null; thumb_url: string }[];
         total: number;
       }>("GET", `/api/photos/${id}/similar?limit=${limit}`),
+    scoreDistribution: (bins = 20) =>
+      request<{
+        bins: number;
+        edges: number[];
+        counts: number[];
+        total: number;
+        unscored: number;
+        min: number | null;
+        max: number | null;
+        mean: number | null;
+      }>("GET", `/api/photos/score-distribution?bins=${bins}`),
     search: (q: string, limit = 50) =>
       request<{
         items: {
@@ -386,8 +397,8 @@ export const api = {
     get: () => request<AppSettings>("GET", "/api/settings"),
     scannedPaths: () =>
       request<{
-        local: { path: string; photo_count: number }[];
-        dsm: { path: string; photo_count: number }[];
+        local: { nas_id: string; path: string; photo_count: number }[];
+        dsm: { nas_id: string; path: string; photo_count: number }[];
       }>("GET", "/api/settings/scanned-paths"),
     put: (patch: Partial<{
       eval_prompt: string;
@@ -413,6 +424,13 @@ export const api = {
         "POST",
         "/api/settings/scan-saved",
       ),
+    deleteScannedFolder: (nas_id: string, path: string) =>
+      request<{
+        deleted_paths: number;
+        deleted_photos: number;
+        folder: string;
+        nas_id: string;
+      }>("DELETE", "/api/settings/scanned-paths", { nas_id, path }),
   },
   nas: {
     status: () =>

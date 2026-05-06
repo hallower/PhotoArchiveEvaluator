@@ -173,13 +173,23 @@ export function PhotoModal({
               <dl>
                 <dt>미학 점수</dt>
                 <dd>
-                  {aest?.ai_score?.toFixed(2) ?? "-"} (raw{" "}
-                  {aest?.raw_score?.toFixed(2) ?? "-"})
+                  {aest?.ai_score?.toFixed(3) ?? "-"}
+                  <span style={{ color: "var(--text-dim)" }}> /100</span>
+                  {aest?.raw_score !== null && aest?.raw_score !== undefined && (
+                    <span style={{ color: "var(--text-dim)", fontSize: 10 }}>
+                      {" "}(raw {aest.raw_score.toFixed(2)})
+                    </span>
+                  )}
                 </dd>
                 <dt>prompt 점수</dt>
                 <dd>
-                  {promptEval?.ai_score?.toFixed(2) ?? "-"} (sim{" "}
-                  {promptEval?.raw_score?.toFixed(3) ?? "-"})
+                  {promptEval?.ai_score?.toFixed(3) ?? "-"}
+                  <span style={{ color: "var(--text-dim)" }}> /100</span>
+                  {promptEval?.raw_score !== null && promptEval?.raw_score !== undefined && (
+                    <span style={{ color: "var(--text-dim)", fontSize: 10 }}>
+                      {" "}(sim {promptEval.raw_score.toFixed(3)})
+                    </span>
+                  )}
                 </dd>
                 <dt>사용자 점수</dt>
                 <dd>
@@ -560,17 +570,51 @@ function UserScoreEditor({
   onSet: (score: number | null) => void;
   disabled: boolean;
 }) {
+  const [draft, setDraft] = useState<string>(
+    current !== null ? current.toFixed(3) : "",
+  );
+
+  useEffect(() => {
+    setDraft(current !== null ? current.toFixed(3) : "");
+  }, [current]);
+
+  const commit = () => {
+    if (draft.trim() === "") return;
+    const v = parseFloat(draft);
+    if (Number.isNaN(v)) return;
+    const clamped = Math.max(0, Math.min(100, v));
+    onSet(parseFloat(clamped.toFixed(3)));
+  };
+
+  const presets = [50, 70, 80, 90, 100];
+
   return (
     <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
-      {[1, 2, 3, 4, 5].map((v) => (
+      <input
+        type="number"
+        min={0}
+        max={100}
+        step={0.001}
+        value={draft}
+        disabled={disabled}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+        }}
+        placeholder="0–100"
+        style={{ width: 90, fontSize: 11, padding: "2px 6px" }}
+      />
+      <span style={{ color: "var(--text-dim)", fontSize: 10 }}>/100</span>
+      {presets.map((v) => (
         <button
           key={v}
           type="button"
           onClick={() => onSet(v)}
           disabled={disabled}
           style={{
-            padding: "2px 8px",
-            fontSize: 11,
+            padding: "2px 6px",
+            fontSize: 10,
             background: current === v ? "var(--accent)" : "var(--panel)",
             color: current === v ? "white" : "var(--text)",
             border: "1px solid var(--border)",
@@ -586,7 +630,7 @@ function UserScoreEditor({
           disabled={disabled}
           style={{
             padding: "2px 8px",
-            fontSize: 11,
+            fontSize: 10,
             background: "var(--panel)",
             color: "var(--text-dim)",
             border: "1px solid var(--border)",

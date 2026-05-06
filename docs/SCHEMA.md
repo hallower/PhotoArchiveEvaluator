@@ -84,7 +84,7 @@ CREATE TABLE evaluations (
     photo_id        INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
     model_id        TEXT NOT NULL,             -- e.g. "aesthetic-v2.5"
     model_version   TEXT NOT NULL,
-    ai_score        REAL,                      -- 1.0 - 5.0
+    ai_score        REAL,                      -- 0.0 - 100.0
     confidence      REAL,
     caption         TEXT,
     caption_lang    TEXT,
@@ -178,7 +178,7 @@ CREATE INDEX idx_advrev_photo ON advanced_reviews(photo_id, created_at DESC);
 -- 2.9 user_scores
 CREATE TABLE user_scores (
     photo_id   INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
-    score      REAL NOT NULL,                   -- 1.0 - 5.0
+    score      REAL NOT NULL,                   -- 0.0 - 100.0
     note       TEXT,
     updated_at DATETIME NOT NULL
 );

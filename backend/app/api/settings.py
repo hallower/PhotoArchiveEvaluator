@@ -14,10 +14,11 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from ..storage.models import PhotoPath
+from ..config import settings as app_settings
+from ..storage.models import Photo, PhotoPath
 
 from ..auth.dependencies import require_auth
 from ..evaluator.rescore import rescore_prompt
@@ -61,7 +62,7 @@ router = APIRouter(
 
 class _SettingsUpdate(BaseModel):
     eval_prompt: str | None = None
-    library_min_score: float | None = Field(default=None, ge=0.0, le=5.0)
+    library_min_score: float | None = Field(default=None, ge=0.0, le=100.0)
     scan_local_paths: list[str] | None = None
     scan_dsm_paths: list[str] | None = None
     eval_max_workers: int | None = Field(default=None, ge=1, le=MAX_ALLOWED_WORKERS)
@@ -149,23 +150,30 @@ def get_scanned_paths(session: Session = Depends(get_session)) -> dict:
     예: /photo/A/B/x.jpg, /photo/A/C/y.jpg → ["/photo/A/B", "/photo/A/C"]
     """
     rows = session.execute(select(PhotoPath.nas_id, PhotoPath.path)).all()
-    local_counts: dict[str, int] = {}
-    dsm_counts: dict[str, int] = {}
+    local_counts: dict[tuple[str, str], int] = {}
+    dsm_counts: dict[tuple[str, str], int] = {}
     for nas_id, path in rows:
         parent = _parent_dir(nas_id, path)
         if not parent:
             continue
+        key = (nas_id, parent)
         if nas_id == "local":
-            local_counts[parent] = local_counts.get(parent, 0) + 1
+            local_counts[key] = local_counts.get(key, 0) + 1
         elif nas_id.startswith("dsm:"):
-            dsm_counts[parent] = dsm_counts.get(parent, 0) + 1
+            dsm_counts[key] = dsm_counts.get(key, 0) + 1
     return {
         "local": sorted(
-            [{"path": p, "photo_count": c} for p, c in local_counts.items()],
+            [
+                {"nas_id": nid, "path": p, "photo_count": c}
+                for (nid, p), c in local_counts.items()
+            ],
             key=lambda x: x["path"],
         ),
         "dsm": sorted(
-            [{"path": p, "photo_count": c} for p, c in dsm_counts.items()],
+            [
+                {"nas_id": nid, "path": p, "photo_count": c}
+                for (nid, p), c in dsm_counts.items()
+            ],
             key=lambda x: x["path"],
         ),
     }
@@ -176,6 +184,84 @@ def _parent_dir(nas_id: str, path: str) -> str:
     if nas_id == "local":
         return os.path.dirname(path) or path
     return posixpath.dirname(path) or path
+
+
+class _DeleteScannedFolderIn(BaseModel):
+    nas_id: str
+    path: str
+
+
+@router.delete("/scanned-paths")
+def delete_scanned_folder(
+    body: _DeleteScannedFolderIn,
+    session: Session = Depends(get_session),
+) -> dict:
+    """스캔된 폴더의 사진을 라이브러리에서 일괄 제거.
+
+    - photo_paths 행 중 nas_id가 일치하고 경로가 폴더의 직속 자손인 행을 모두 삭제.
+    - 결과적으로 모든 path를 잃은 photo는 함께 삭제(평가/임베딩/태그/포트폴리오 cascade).
+    - **원본 파일(로컬·NAS)은 보존**한다 — 사용자 정책.
+    """
+    folder = body.path.rstrip("/").rstrip("\\")
+    if not folder:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty folder path")
+
+    seps: tuple[str, ...] = ("\\", "/") if body.nas_id == "local" else ("/",)
+    like_filters = [PhotoPath.path.like(folder + sep + "%") for sep in seps]
+
+    target_photo_ids = [
+        pid
+        for (pid,) in session.execute(
+            select(PhotoPath.photo_id).where(
+                PhotoPath.nas_id == body.nas_id,
+                or_(*like_filters),
+            )
+        ).all()
+    ]
+
+    deleted_paths = (
+        session.execute(
+            delete(PhotoPath).where(
+                PhotoPath.nas_id == body.nas_id,
+                or_(*like_filters),
+            )
+        ).rowcount
+        or 0
+    )
+
+    orphan_ids: list[int] = []
+    if target_photo_ids:
+        orphan_ids = [
+            pid
+            for (pid,) in session.execute(
+                select(Photo.id)
+                .outerjoin(PhotoPath, PhotoPath.photo_id == Photo.id)
+                .where(Photo.id.in_(set(target_photo_ids)))
+                .group_by(Photo.id)
+                .having(func.count(PhotoPath.id) == 0)
+            ).all()
+        ]
+
+    if orphan_ids:
+        session.execute(Photo.__table__.delete().where(Photo.id.in_(orphan_ids)))
+    session.commit()
+
+    # 썸네일 캐시 정리 (best-effort)
+    for pid in orphan_ids:
+        for size in (200, 400, 800):
+            cache = app_settings.thumb_dir / f"{pid}_{size}.jpg"
+            if cache.exists():
+                try:
+                    cache.unlink()
+                except OSError:
+                    pass
+
+    return {
+        "deleted_paths": int(deleted_paths),
+        "deleted_photos": len(orphan_ids),
+        "folder": folder,
+        "nas_id": body.nas_id,
+    }
 
 
 def _topmost(paths: set[str], sep_chars: tuple[str, ...]) -> list[str]:

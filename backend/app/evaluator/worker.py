@@ -84,13 +84,13 @@ PROMPT_MODEL_VERSION = "vit-l-14"
 
 
 def _prompt_score(cosine_sim: float) -> float:
-    """CLIP cosine similarity → 1-5 normalized score.
+    """CLIP cosine similarity → 0-100 normalized score.
 
     실측 (137장 사용자 라이브러리, 미학 prompt) — sim 분포는 0.178~0.230에 집중.
-    선형 매핑: sim 0.16 → 1점, sim 0.26 → 5점. 일반 prompt 기준으로 라이브러리에서
-    상위 사진이 4-5점에 도달할 수 있게 한다. prompt가 더 구체적이면 분포가 위로 이동.
+    선형 매핑: sim 0.16 → 0점, sim 0.26 → 100점. 일반 prompt 기준으로 라이브러리에서
+    상위 사진이 80+점에 도달할 수 있게 한다. prompt가 더 구체적이면 분포가 위로 이동.
     """
-    return max(1.0, min(5.0, (cosine_sim - 0.16) * 40 + 1))
+    return max(0.0, min(100.0, (cosine_sim - 0.16) * 1000.0))
 
 
 class EvaluatorWorker:
