@@ -384,6 +384,11 @@ export const api = {
   },
   settings: {
     get: () => request<AppSettings>("GET", "/api/settings"),
+    scannedPaths: () =>
+      request<{
+        local: { path: string; photo_count: number }[];
+        dsm: { path: string; photo_count: number }[];
+      }>("GET", "/api/settings/scanned-paths"),
     put: (patch: Partial<{
       eval_prompt: string;
       library_min_score: number;

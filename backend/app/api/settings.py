@@ -7,12 +7,17 @@ POST /api/settings/scan-saved — 저장된 로컬+NAS 경로 모두 스캔
 
 from __future__ import annotations
 
+import os
+import posixpath
 import threading
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+from ..storage.models import PhotoPath
 
 from ..auth.dependencies import require_auth
 from ..evaluator.rescore import rescore_prompt
@@ -136,6 +141,56 @@ def put_settings(
     return {"ok": True, "prompt_rescored": prompt_changed}
 
 
+@router.get("/scanned-paths")
+def get_scanned_paths(session: Session = Depends(get_session)) -> dict:
+    """스캔된 사진의 부모 폴더 목록 (DB photo_paths에서 자동 도출).
+
+    사용자가 입력한 폴더가 아닌, **실제로 사진이 등록된** 모든 부모 폴더를 보여준다.
+    예: /photo/A/B/x.jpg, /photo/A/C/y.jpg → ["/photo/A/B", "/photo/A/C"]
+    """
+    rows = session.execute(select(PhotoPath.nas_id, PhotoPath.path)).all()
+    local_counts: dict[str, int] = {}
+    dsm_counts: dict[str, int] = {}
+    for nas_id, path in rows:
+        parent = _parent_dir(nas_id, path)
+        if not parent:
+            continue
+        if nas_id == "local":
+            local_counts[parent] = local_counts.get(parent, 0) + 1
+        elif nas_id.startswith("dsm:"):
+            dsm_counts[parent] = dsm_counts.get(parent, 0) + 1
+    return {
+        "local": sorted(
+            [{"path": p, "photo_count": c} for p, c in local_counts.items()],
+            key=lambda x: x["path"],
+        ),
+        "dsm": sorted(
+            [{"path": p, "photo_count": c} for p, c in dsm_counts.items()],
+            key=lambda x: x["path"],
+        ),
+    }
+
+
+def _parent_dir(nas_id: str, path: str) -> str:
+    """경로의 부모 디렉터리. local은 OS-aware, DSM은 POSIX."""
+    if nas_id == "local":
+        return os.path.dirname(path) or path
+    return posixpath.dirname(path) or path
+
+
+def _topmost(paths: set[str], sep_chars: tuple[str, ...]) -> list[str]:
+    """다른 path의 조상이 되는 path만 남김 (descendant 제거)."""
+    sorted_paths = sorted(paths)
+    out: list[str] = []
+    for p in sorted_paths:
+        is_descendant = any(
+            p.startswith(r + s) for r in out for s in sep_chars
+        )
+        if not is_descendant:
+            out.append(p)
+    return out
+
+
 @router.put("/api-keys", status_code=status.HTTP_204_NO_CONTENT)
 def put_api_key(body: _ApiKeyIn) -> None:
     if body.provider not in api_keys.KNOWN_PROVIDERS:
@@ -155,12 +210,25 @@ def delete_api_key(provider: str) -> None:
 
 @router.post("/scan-saved", status_code=status.HTTP_202_ACCEPTED)
 def scan_saved(session: Session = Depends(get_session)) -> dict:
-    local_paths = get_paths_list(session, SCAN_LOCAL_PATHS)
-    dsm_paths = get_paths_list(session, SCAN_DSM_PATHS)
+    """스캔된 사진의 부모 폴더(DB)를 모두 재스캔. topmost만 walk해 중복 회피."""
+    rows = session.execute(select(PhotoPath.nas_id, PhotoPath.path)).all()
+    local_set: set[str] = set()
+    dsm_set: set[str] = set()
+    for nas_id, path in rows:
+        parent = _parent_dir(nas_id, path)
+        if not parent:
+            continue
+        if nas_id == "local":
+            local_set.add(parent)
+        elif nas_id.startswith("dsm:"):
+            dsm_set.add(parent)
+
+    local_paths = _topmost(local_set, ("\\", "/"))
+    dsm_paths = _topmost(dsm_set, ("/",))
 
     if not local_paths and not dsm_paths:
         raise HTTPException(
-            status.HTTP_409_CONFLICT, "no scan paths saved"
+            status.HTTP_409_CONFLICT, "no scanned photos in DB — start with NAS/local 스캔 button"
         )
 
     # 로컬 스캐너는 경로별 스레드 1개. NAS는 동일 세션 내 순차 처리(부하 보호).

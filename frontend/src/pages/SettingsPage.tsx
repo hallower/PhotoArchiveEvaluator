@@ -15,6 +15,10 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
   const [backups, setBackups] = useState<BackupRecord[]>([]);
   const [failedJobs, setFailedJobs] = useState<ScanJob[]>([]);
   const [models, setModels] = useState<ExternalModel[]>([]);
+  const [scannedPaths, setScannedPaths] = useState<{
+    local: { path: string; photo_count: number }[];
+    dsm: { path: string; photo_count: number }[];
+  }>({ local: [], dsm: [] });
 
   const loadFailed = () =>
     api.scan
@@ -26,6 +30,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
     void api.settings.get().then(setS);
     void api.backup.list().then(setBackups).catch(() => {});
     void api.advanced.models().then((r) => setModels(r.models)).catch(() => {});
+    void api.settings.scannedPaths().then(setScannedPaths).catch(() => {});
     void loadFailed();
   }, []);
 
@@ -111,8 +116,6 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
       const r = await api.settings.put({
         eval_prompt: s.eval_prompt,
         library_min_score: s.library_min_score,
-        scan_local_paths: s.scan_local_paths,
-        scan_dsm_paths: s.scan_dsm_paths,
         eval_max_workers: s.eval_max_workers,
         external_allow_send: s.external_allow_send,
         external_strip_exif: s.external_strip_exif,
@@ -222,20 +225,19 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
           </button>
         </Section>
 
-        <Section title="로컬 스캔 폴더">
-          <PathList
-            paths={s.scan_local_paths}
-            onChange={(scan_local_paths) => update({ scan_local_paths })}
-            placeholder='Windows 절대경로 (예: C:\Users\you\Pictures\folder)'
-          />
+        <Section title={`로컬 스캔된 폴더 (${scannedPaths.local.length})`}>
+          <p style={{ color: "var(--text-dim)", fontSize: 12, margin: "0 0 8px 0" }}>
+            현재 라이브러리 사진의 로컬 부모 폴더 자동 도출. 새 폴더는 헤더의 "로컬 스캔" 버튼으로 추가.
+          </p>
+          <ScannedList items={scannedPaths.local} />
         </Section>
 
-        <Section title="NAS (DSM) 스캔 폴더">
-          <PathList
-            paths={s.scan_dsm_paths}
-            onChange={(scan_dsm_paths) => update({ scan_dsm_paths })}
-            placeholder='DSM 절대경로 (예: /photo/My Pictures-2023)'
-          />
+        <Section title={`NAS (DSM) 스캔된 폴더 (${scannedPaths.dsm.length})`}>
+          <p style={{ color: "var(--text-dim)", fontSize: 12, margin: "0 0 8px 0" }}>
+            현재 라이브러리 사진의 NAS 부모 폴더 자동 도출. 새 폴더는 헤더의 "NAS 스캔" 버튼으로 추가.
+            "저장된 폴더 모두 스캔"은 이 폴더들의 최상위 조상만 walk (중복 제거).
+          </p>
+          <ScannedList items={scannedPaths.dsm} />
         </Section>
 
         <Section title={`실패한 스캔 (${failedJobs.length})`}>
@@ -460,6 +462,52 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+function ScannedList({
+  items,
+}: {
+  items: { path: string; photo_count: number }[];
+}) {
+  if (items.length === 0) {
+    return (
+      <div style={{ color: "var(--text-dim)", fontSize: 12 }}>
+        스캔된 사진 없음 — 헤더의 스캔 버튼으로 시작하세요.
+      </div>
+    );
+  }
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        fontSize: 12,
+        maxHeight: 280,
+        overflowY: "auto",
+      }}
+    >
+      {items.map((it) => (
+        <div
+          key={it.path}
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            gap: 8,
+            padding: "6px 10px",
+            background: "var(--panel)",
+            borderRadius: 4,
+          }}
+        >
+          <span style={{ flex: 1, wordBreak: "break-all" }}>{it.path}</span>
+          <span style={{ color: "var(--text-dim)", whiteSpace: "nowrap" }}>
+            {it.photo_count}장
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+
 function ApiKeyEditor({
   provider,
   label,
@@ -518,78 +566,6 @@ function ApiKeyEditor({
             제거
           </button>
         )}
-      </div>
-    </div>
-  );
-}
-
-function PathList({
-  paths,
-  onChange,
-  placeholder,
-}: {
-  paths: string[];
-  onChange: (paths: string[]) => void;
-  placeholder: string;
-}) {
-  const [draft, setDraft] = useState("");
-
-  const add = () => {
-    const t = draft.trim();
-    if (!t) return;
-    if (paths.includes(t)) {
-      setDraft("");
-      return;
-    }
-    onChange([...paths, t]);
-    setDraft("");
-  };
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      {paths.length === 0 && (
-        <div style={{ color: "var(--text-dim)", fontSize: 12 }}>등록된 폴더 없음</div>
-      )}
-      {paths.map((p, i) => (
-        <div
-          key={`${p}-${i}`}
-          style={{
-            display: "flex",
-            gap: 6,
-            alignItems: "center",
-            background: "var(--panel)",
-            borderRadius: 6,
-            padding: "6px 10px",
-            fontSize: 12,
-          }}
-        >
-          <span style={{ flex: 1, wordBreak: "break-all" }}>{p}</span>
-          <button
-            className="ghost"
-            type="button"
-            onClick={() => onChange(paths.filter((_, j) => j !== i))}
-            style={{ padding: "4px 10px", fontSize: 11 }}
-          >
-            제거
-          </button>
-        </div>
-      ))}
-      <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder={placeholder}
-          style={{ flex: 1 }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              add();
-            }
-          }}
-        />
-        <button type="button" onClick={add}>
-          추가
-        </button>
       </div>
     </div>
   );
