@@ -24,7 +24,16 @@ from ..auth.dependencies import require_auth
 from ..config import settings
 from ..nas.session import open_dsm_client
 from ..storage.db import get_session
-from ..storage.models import Embedding, Evaluation, Photo, PhotoPath, PhotoTag, Tag, UserScore
+from ..storage.models import (
+    AdvancedReview,
+    Embedding,
+    Evaluation,
+    Photo,
+    PhotoPath,
+    PhotoTag,
+    Tag,
+    UserScore,
+)
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +69,9 @@ def list_photos(
     max_score: float | None = Query(None),
     camera: str | None = None,
     q: str | None = Query(None, description="키워드: camera/lens/path 부분 일치"),
+    has_advanced: bool | None = Query(
+        None, description="True=고급 평가 있는 것만, False=없는 것만, None=전체"
+    ),
     sort: str = "-taken_at",
 ) -> dict:
     if sort not in _SORT_OPTIONS:
@@ -82,6 +94,16 @@ def list_photos(
         .subquery()
     )
     pe = aliased(Evaluation)
+
+    # 고급 평가 횟수: 카드에 배지로 표시하기 위한 사진별 카운트
+    adv_sub = (
+        select(
+            AdvancedReview.photo_id.label("photo_id"),
+            func.count(AdvancedReview.id).label("adv_count"),
+        )
+        .group_by(AdvancedReview.photo_id)
+        .subquery()
+    )
 
     final_score = func.coalesce(UserScore.score, e.ai_score)
 
@@ -109,12 +131,14 @@ def list_photos(
             pe.raw_score.label("prompt_raw"),
             UserScore.score.label("user_score"),
             final_score.label("final_score"),
+            func.coalesce(adv_sub.c.adv_count, 0).label("advanced_review_count"),
         )
         .outerjoin(aest_sub, aest_sub.c.photo_id == Photo.id)
         .outerjoin(e, e.id == aest_sub.c.eval_id)
         .outerjoin(prompt_sub, prompt_sub.c.photo_id == Photo.id)
         .outerjoin(pe, pe.id == prompt_sub.c.eval_id)
         .outerjoin(UserScore, UserScore.photo_id == Photo.id)
+        .outerjoin(adv_sub, adv_sub.c.photo_id == Photo.id)
         .where(Photo.state == "active")
     )
 
@@ -133,6 +157,12 @@ def list_photos(
             (Photo.camera_model.like(like))
             | (Photo.lens_model.like(like))
             | (Photo.id.in_(path_subq))
+        )
+    if has_advanced is True:
+        base = base.where(adv_sub.c.adv_count > 0)
+    elif has_advanced is False:
+        base = base.where(
+            (adv_sub.c.adv_count.is_(None)) | (adv_sub.c.adv_count == 0)
         )
 
     sort_col = {
@@ -176,6 +206,7 @@ def list_photos(
             "prompt_raw": r.prompt_raw,
             "user_score": r.user_score,
             "final_score": r.final_score,
+            "advanced_review_count": int(r.advanced_review_count or 0),
             "thumb_url": f"/api/photos/{r.id}/thumb",
         }
         for r in rows

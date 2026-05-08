@@ -28,6 +28,7 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchActive, setSearchActive] = useState(false);
   const [keyword, setKeyword] = useState("");
+  const [advancedFilter, setAdvancedFilter] = useState<"all" | "with" | "without">("all");
   const [selected, setSelectedSet] = useState<Set<number>>(new Set());
   const [showPortfolios, setShowPortfolios] = useState(false);
   const [portfolios, setPortfolios] = useState<PortfolioSummary[]>([]);
@@ -51,6 +52,8 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
         sort,
         limit: 200,
         q: keyword.trim() || undefined,
+        has_advanced:
+          advancedFilter === "with" ? true : advancedFilter === "without" ? false : undefined,
       });
       setPhotos(res.items);
       setTotal(res.total);
@@ -58,7 +61,7 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
     } finally {
       setLoading(false);
     }
-  }, [minScore, sort, keyword]);
+  }, [minScore, sort, keyword, advancedFilter]);
 
   // 첫 진입 시 settings에서 임계값 로드
   useEffect(() => {
@@ -336,6 +339,20 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
             ))}
           </select>
         </label>
+        <label>
+          고급 평가
+          <select
+            value={advancedFilter}
+            onChange={(e) =>
+              setAdvancedFilter(e.target.value as "all" | "with" | "without")
+            }
+            disabled={searchActive}
+          >
+            <option value="all">전체</option>
+            <option value="with">있는 것만</option>
+            <option value="without">없는 것만</option>
+          </select>
+        </label>
         {searchActive && (
           <button
             className="ghost"
@@ -520,6 +537,24 @@ function Card({
           <span style={{ opacity: 0.7, fontSize: "0.85em" }}>/100</span>
         </div>
       )}
+      {photo.advanced_review_count && photo.advanced_review_count > 0 ? (
+        <div
+          title={`고급 평가 ${photo.advanced_review_count}건`}
+          style={{
+            position: "absolute",
+            top: 6,
+            right: displayScore !== null && displayScore !== undefined ? 80 : 6,
+            background: "rgba(140, 80, 220, 0.92)",
+            color: "white",
+            padding: "2px 7px",
+            borderRadius: 12,
+            fontSize: 10,
+            fontWeight: 600,
+          }}
+        >
+          고급 {photo.advanced_review_count}
+        </div>
+      ) : null}
       <div className="info">
         <span>{photo.camera_model ?? "-"}</span>
         <span>

@@ -16,8 +16,19 @@ export function PhotoModal({
   const [selectedPaths, setSelectedPaths] = useState<Set<number>>(new Set());
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [advReviews, setAdvReviews] = useState<AdvancedReview[]>([]);
+  const [showReviewsModal, setShowReviewsModal] = useState(false);
 
   const loadReviews = () => api.advanced.listReviews(photoId).then(setAdvReviews).catch(() => {});
+
+  const deleteReview = async (id: number) => {
+    if (!window.confirm("이 고급 평가 기록을 삭제할까요?")) return;
+    try {
+      await api.advanced.deleteReview(id);
+      await loadReviews();
+    } catch (e) {
+      alert(`실패: ${e instanceof Error ? e.message : e}`);
+    }
+  };
 
   const togglePath = (id: number) =>
     setSelectedPaths((prev) => {
@@ -308,10 +319,27 @@ export function PhotoModal({
 
               {advReviews.length > 0 && (
                 <div style={{ marginTop: 12 }}>
-                  <h4 style={{ margin: "6px 0", fontSize: 12 }}>
-                    고급 평가 이력 ({advReviews.length})
-                  </h4>
-                  {advReviews.slice(0, 3).map((r) => (
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      margin: "6px 0",
+                    }}
+                  >
+                    <h4 style={{ margin: 0, fontSize: 12 }}>
+                      고급 평가 이력 ({advReviews.length})
+                    </h4>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => setShowReviewsModal(true)}
+                      style={{ fontSize: 11, padding: "3px 8px" }}
+                    >
+                      전체 보기
+                    </button>
+                  </div>
+                  {advReviews.slice(0, 2).map((r) => (
                     <div
                       key={r.id}
                       style={{
@@ -328,10 +356,16 @@ export function PhotoModal({
                           ${r.cost_usd?.toFixed(4) ?? "-"}
                         </span>
                       </div>
-                      <div style={{ marginTop: 4, whiteSpace: "pre-wrap", color: "var(--text)" }}>
-                        {r.response.length > 240
-                          ? r.response.slice(0, 240) + "…"
-                          : r.response}
+                      <div
+                        style={{
+                          marginTop: 4,
+                          whiteSpace: "pre-wrap",
+                          color: "var(--text)",
+                          maxHeight: 120,
+                          overflowY: "auto",
+                        }}
+                      >
+                        {r.response}
                       </div>
                     </div>
                   ))}
@@ -394,6 +428,251 @@ export function PhotoModal({
           }}
         />
       )}
+
+      {showReviewsModal && (
+        <AdvancedReviewsListModal
+          reviews={advReviews}
+          onClose={() => setShowReviewsModal(false)}
+          onDelete={deleteReview}
+        />
+      )}
+    </div>
+  );
+}
+
+function AdvancedReviewsListModal({
+  reviews,
+  onClose,
+  onDelete,
+}: {
+  reviews: AdvancedReview[];
+  onClose: () => void;
+  onDelete: (id: number) => void;
+}) {
+  // 리뷰별 번역 상태: id → { busy, text, error }
+  const [translations, setTranslations] = useState<
+    Record<number, { busy: boolean; text?: string; error?: string }>
+  >({});
+
+  const translate = async (id: number, source: string) => {
+    setTranslations((prev) => ({ ...prev, [id]: { busy: true } }));
+    try {
+      const r = await api.advanced.translate(source);
+      setTranslations((prev) => ({
+        ...prev,
+        [id]: { busy: false, text: r.translated },
+      }));
+    } catch (e) {
+      setTranslations((prev) => ({
+        ...prev,
+        [id]: { busy: false, error: e instanceof Error ? e.message : String(e) },
+      }));
+    }
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="modal-bg" onClick={onClose} style={{ zIndex: 200 }}>
+      <div
+        className="modal"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          flexDirection: "column",
+          maxWidth: 820,
+          width: "100%",
+          maxHeight: "90vh",
+          padding: 0,
+        }}
+      >
+        <div
+          style={{
+            padding: "14px 18px",
+            borderBottom: "1px solid var(--border)",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            flex: "0 0 auto",
+          }}
+        >
+          <h3 style={{ margin: 0, fontSize: 14 }}>
+            고급 평가 이력 ({reviews.length})
+          </h3>
+          <button className="ghost" onClick={onClose} style={{ fontSize: 12 }}>
+            닫기
+          </button>
+        </div>
+        <div
+          style={{
+            padding: 14,
+            overflowY: "auto",
+            flex: "1 1 auto",
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
+          {reviews.length === 0 && (
+            <div className="empty">고급 평가 기록이 없습니다.</div>
+          )}
+          {reviews.map((r) => {
+            const tr = translations[r.id];
+            return (
+              <div
+                key={r.id}
+                style={{
+                  background: "var(--panel-2)",
+                  border: "1px solid var(--border)",
+                  padding: 12,
+                  borderRadius: 6,
+                  fontSize: 12,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: 8,
+                    flexWrap: "wrap",
+                    gap: 8,
+                  }}
+                >
+                  <div style={{ display: "flex", flexDirection: "column" }}>
+                    <span style={{ color: "var(--text)", fontWeight: 600 }}>
+                      {r.model_id}
+                    </span>
+                    <span style={{ color: "var(--text-dim)", fontSize: 10 }}>
+                      {new Date(r.created_at).toLocaleString("ko-KR")}
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      color: "var(--text-dim)",
+                      fontSize: 11,
+                    }}
+                  >
+                    <span>
+                      ${r.cost_usd?.toFixed(4) ?? "-"}
+                      {r.tokens_in !== null && r.tokens_out !== null && (
+                        <> · {r.tokens_in}/{r.tokens_out} tok</>
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => translate(r.id, r.response)}
+                      disabled={tr?.busy}
+                      style={{
+                        padding: "2px 8px",
+                        fontSize: 10,
+                        background: tr?.text ? "var(--panel)" : "var(--accent)",
+                        color: "white",
+                        border: "1px solid var(--border)",
+                      }}
+                    >
+                      {tr?.busy ? "번역 중..." : tr?.text ? "다시 번역" : "한글 번역"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onDelete(r.id)}
+                      style={{
+                        padding: "2px 8px",
+                        fontSize: 10,
+                        background: "var(--panel)",
+                        color: "var(--text-dim)",
+                        border: "1px solid var(--border)",
+                      }}
+                    >
+                      삭제
+                    </button>
+                  </div>
+                </div>
+                {r.prompt && (
+                  <details style={{ marginBottom: 8 }}>
+                    <summary
+                      style={{
+                        color: "var(--text-dim)",
+                        fontSize: 10,
+                        cursor: "pointer",
+                      }}
+                    >
+                      프롬프트 보기
+                    </summary>
+                    <div
+                      style={{
+                        marginTop: 4,
+                        padding: 8,
+                        background: "var(--panel)",
+                        borderRadius: 4,
+                        whiteSpace: "pre-wrap",
+                        color: "var(--text-dim)",
+                        fontSize: 11,
+                      }}
+                    >
+                      {r.prompt}
+                    </div>
+                  </details>
+                )}
+                <div
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    color: "var(--text)",
+                    lineHeight: 1.55,
+                  }}
+                >
+                  {r.response}
+                </div>
+                {tr?.text && (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      padding: 10,
+                      background: "var(--panel)",
+                      borderLeft: "3px solid var(--accent)",
+                      borderRadius: 4,
+                      whiteSpace: "pre-wrap",
+                      color: "var(--text)",
+                      lineHeight: 1.55,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 10,
+                        color: "var(--text-dim)",
+                        marginBottom: 6,
+                        fontWeight: 600,
+                      }}
+                    >
+                      한글 번역
+                    </div>
+                    {tr.text}
+                  </div>
+                )}
+                {tr?.error && (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      color: "var(--danger)",
+                      fontSize: 11,
+                    }}
+                  >
+                    번역 실패: {tr.error}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }

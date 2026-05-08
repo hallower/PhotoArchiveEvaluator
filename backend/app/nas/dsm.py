@@ -16,12 +16,16 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Iterator
 from typing import Any
 
 import httpx
 
 log = logging.getLogger(__name__)
+
+# SID 만료/유효 안 됨을 나타내는 DSM 에러 코드들. 자동 재로그인 후 재시도 대상.
+_SID_INVALID_CODES = frozenset({105, 106, 107, 119})
 
 
 # DSM Auth / FileStation 에러 코드 (전체는 공식 문서 참조)
@@ -87,6 +91,12 @@ class DSMClient:
         )
         self._sid: str | None = None
         self._device_id: str | None = None
+        # 자격증명 캐시: SID 만료 시 자동 재로그인용. 키체인이 메모리에 유지되는 동안만 유효.
+        self._credentials: dict[str, Any] | None = None
+        # 동시에 여러 스레드가 SID 만료를 감지해도 한 번만 재로그인하도록.
+        self._relogin_lock = threading.Lock()
+        # 공유 클라이언트(close()가 다른 곳에서 관리됨)인지 표시 — __exit__에서 logout/close 막음.
+        self._shared = False
 
     # ─── 컨텍스트 매니저 ────────────────────────────────────────────────
 
@@ -94,11 +104,28 @@ class DSMClient:
         return self
 
     def __exit__(self, *exc) -> None:
+        if self._shared:
+            return  # 공유 클라이언트는 caller가 lifecycle 관리
         try:
             if self._sid:
                 self.logout()
         finally:
             self._client.close()
+
+    def mark_shared(self) -> None:
+        """공유 클라이언트로 표시. 이후 with 블록에서 자동 logout/close 안 함."""
+        self._shared = True
+
+    def close(self) -> None:
+        """명시적 종료. 공유 클라이언트의 lifecycle 끝낼 때만 caller가 호출."""
+        try:
+            if self._sid:
+                self.logout()
+        finally:
+            try:
+                self._client.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     # ─── 인증 ────────────────────────────────────────────────────────────
 
@@ -144,13 +171,37 @@ class DSMClient:
             raise DSMError(data.get("error", {}).get("code", -1), category="auth")
         payload = data.get("data", {})
         self._sid = payload["sid"]
-        self._device_id = payload.get("did")
+        self._device_id = payload.get("did") or device_id
+        # 재로그인용 자격증명 캐시 — SID 만료 시 인증을 다시 거치지 않고 동일 파라미터 재사용.
+        self._credentials = {
+            "username": username,
+            "password": password,
+            "otp_code": None,  # 최초 OTP는 device_id로 대체된 상태에서만 _relogin 호출됨
+            "device_id": self._device_id,
+            "device_name": device_name,
+            "enable_device_token": False,
+        }
         log.info(
             "DSM login ok: %s sid=...%s did=%s",
             self.base_url,
             self._sid[-6:],
             "yes" if self._device_id else "no",
         )
+
+    def _relogin(self, prior_sid: str | None) -> None:
+        """SID 만료 감지 시 호출. 동시에 여러 스레드가 호출해도 1번만 실제 로그인.
+
+        prior_sid: 호출자가 만료라고 판단한 시점의 sid. 락 획득 후 sid가 다르면 다른 스레드가
+        먼저 재로그인한 것이므로 현재 sid를 그대로 사용.
+        """
+        if self._credentials is None:
+            raise RuntimeError("no cached credentials — call login() first")
+        with self._relogin_lock:
+            if self._sid != prior_sid and self._sid is not None:
+                return  # 다른 스레드가 이미 재로그인 완료
+            self._sid = None
+            self.login(**self._credentials)
+            log.info("DSM relogin ok")
 
     @property
     def device_id(self) -> str | None:
@@ -246,16 +297,33 @@ class DSMClient:
             offset += page
 
     def download(self, path: str) -> bytes:
+        return self._download_attempt(path, allow_relogin=True)
+
+    def _download_attempt(self, path: str, allow_relogin: bool) -> bytes:
+        sid_at_call = self._sid
         params = {
             "api": "SYNO.FileStation.Download",
             "version": "2",
             "method": "download",
             "path": path,
             "mode": "open",
-            "_sid": self._sid,
+            "_sid": sid_at_call,
         }
         resp = self._client.get(f"{self.base_url}/webapi/entry.cgi", params=params)
         resp.raise_for_status()
+        # SID 만료 시 DSM은 binary 대신 JSON 에러를 반환할 수 있다.
+        ctype = resp.headers.get("content-type", "")
+        if "json" in ctype.lower():
+            try:
+                data = resp.json()
+            except ValueError:
+                return resp.content  # 정상 binary가 우연히 json content-type일 가능성 → 그대로 반환
+            if not data.get("success", True):
+                code = data.get("error", {}).get("code", -1)
+                if allow_relogin and code in _SID_INVALID_CODES:
+                    self._relogin(sid_at_call)
+                    return self._download_attempt(path, allow_relogin=False)
+                raise DSMError(code)
         return resp.content
 
     def stream_download(self, path: str, chunk_size: int = 1 << 16) -> Iterator[bytes]:
@@ -281,20 +349,38 @@ class DSMClient:
         method: str,
         **params: Any,
     ) -> dict[str, Any]:
+        return self._call_attempt(api, version, method, allow_relogin=True, **params)
+
+    def _call_attempt(
+        self,
+        api: str,
+        version: int,
+        method: str,
+        *,
+        allow_relogin: bool,
+        **params: Any,
+    ) -> dict[str, Any]:
         if not self._sid:
             raise RuntimeError("not logged in — call login() first")
+        sid_at_call = self._sid
         all_params: dict[str, Any] = {
             "api": api,
             "version": str(version),
             "method": method,
-            "_sid": self._sid,
+            "_sid": sid_at_call,
             **{k: str(v) for k, v in params.items()},
         }
         resp = self._client.get(f"{self.base_url}/webapi/entry.cgi", params=all_params)
         resp.raise_for_status()
         data = resp.json()
         if not data.get("success"):
-            raise DSMError(data.get("error", {}).get("code", -1))
+            code = data.get("error", {}).get("code", -1)
+            if allow_relogin and code in _SID_INVALID_CODES:
+                self._relogin(sid_at_call)
+                return self._call_attempt(
+                    api, version, method, allow_relogin=False, **params
+                )
+            raise DSMError(code)
         return data.get("data", {})
 
 

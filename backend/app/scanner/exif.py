@@ -122,7 +122,8 @@ def _coerce_int(value) -> int | None:
         value = value[0]
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, ZeroDivisionError):
+        # IFDRational(0, 0)은 int() 시 ZeroDivisionError를 던진다.
         return None
 
 
@@ -131,7 +132,8 @@ def _coerce_float(value) -> float | None:
         return None
     try:
         return float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, ZeroDivisionError):
+        # IFDRational(0, 0)은 float() 시 ZeroDivisionError를 던진다.
         return None
 
 
@@ -153,7 +155,7 @@ def _gps_to_decimal(value, ref) -> float | None:
     try:
         d, m, s = value
         deg = float(d) + float(m) / 60 + float(s) / 3600
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, ZeroDivisionError):
         return None
     if ref in ("S", "W", b"S", b"W"):
         deg = -deg

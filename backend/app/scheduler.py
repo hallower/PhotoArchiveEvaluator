@@ -62,17 +62,32 @@ def _loop(interval: int) -> None:
 
 
 def run_once(session_factory: Callable[[], Session]) -> int:
-    """state=failed 잡들을 쿨다운 안에 들지 않은 것만 재시도. 시작된 스캔 수 반환."""
+    """state=failed 잡들을 쿨다운 안에 들지 않은 것만 재시도. 시작된 스캔 수 반환.
+
+    동일 folders payload는 하나로 dedup해서 재시도. 같은 폴더에 대해 누적된 수십~수백 개의
+    실패 잡이 있어도 한 번만 재시도해 NAS 부하를 막는다.
+    """
     now = time.time()
-    started = 0
     with session_factory() as s:
         rows = s.execute(select(ScanJob).where(ScanJob.state == "failed")).scalars().all()
-    for job in rows:
-        last = _last_retry_at.get(job.id, 0)
+
+    # folders payload 기준 dedup — 같은 폴더라면 첫 잡만 사용 (id 큰 순으로 보면 최신)
+    by_folders: dict[str, ScanJob] = {}
+    for job in sorted(rows, key=lambda j: -j.id):
+        if job.folders not in by_folders:
+            by_folders[job.folders] = job
+
+    started = 0
+    skipped_dup = len(rows) - len(by_folders)
+    for job in by_folders.values():
+        last = _last_retry_at.get(job.folders, 0)
         if now - last < COOLDOWN_SECONDS:
             continue
-        _last_retry_at[job.id] = now
+        _last_retry_at[job.folders] = now
         started += start_scans_for_job(session_factory, job.folders)
-    if started:
-        log.info("auto-retry: started %d scans from %d failed jobs", started, len(rows))
+    if started or skipped_dup:
+        log.info(
+            "auto-retry: started %d scans (failed_jobs=%d, deduped=%d)",
+            started, len(rows), skipped_dup,
+        )
     return started

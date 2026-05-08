@@ -27,6 +27,7 @@ from ..nas.credentials import (
     save_device_id,
 )
 from ..nas.dsm import DSMClient, DSMError, query_api_info
+from ..nas.session import get_shared_client, reset_shared_client
 from ..storage.db import get_session
 
 log = logging.getLogger(__name__)
@@ -105,6 +106,8 @@ def setup(body: _NASSetup, session: Session = Depends(get_session)) -> None:
     )
     if device_id:
         save_device_id(body.username, device_id)
+    # 자격증명이 변경되었으니 다음 호출자가 새 설정으로 lazy-login하도록 공유 세션을 무효화.
+    reset_shared_client()
 
 
 @router.get("/status")
@@ -128,46 +131,35 @@ def list_folders(
     path: str = "",
     session: Session = Depends(get_session),
 ) -> dict:
-    config = load_config(session)
-    if config is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "NAS not configured")
-    password = load_password(config.username)
-    if password is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "password missing in keyring")
-
-    device_id = load_device_id(config.username)
     try:
-        with DSMClient(config.base_url) as client:
-            client.login(
-                config.username,
-                password,
-                device_id=device_id,
-                device_name=DEVICE_NAME if device_id else None,
-            )
-            if not path:
-                items = client.list_shares()
-                # list_share 응답을 list 형태와 비슷하게 정규화
-                return {
-                    "path": "",
-                    "items": [
-                        {"name": s.get("name"), "path": s.get("path"), "isdir": True}
-                        for s in items
-                    ],
+        client = get_shared_client()
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+    try:
+        if not path:
+            items = client.list_shares()
+            # list_share 응답을 list 형태와 비슷하게 정규화
+            return {
+                "path": "",
+                "items": [
+                    {"name": s.get("name"), "path": s.get("path"), "isdir": True}
+                    for s in items
+                ],
+            }
+        files = client.list_folder(path)
+        return {
+            "path": path,
+            "items": [
+                {
+                    "name": f.get("name"),
+                    "path": f.get("path"),
+                    "isdir": bool(f.get("isdir")),
+                    "size": f.get("additional", {}).get("size"),
                 }
-            else:
-                files = client.list_folder(path)
-                return {
-                    "path": path,
-                    "items": [
-                        {
-                            "name": f.get("name"),
-                            "path": f.get("path"),
-                            "isdir": bool(f.get("isdir")),
-                            "size": f.get("additional", {}).get("size"),
-                        }
-                        for f in files
-                    ],
-                }
+                for f in files
+            ],
+        }
     except DSMError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
@@ -176,3 +168,5 @@ def list_folders(
 def remove(session: Session = Depends(get_session)) -> None:
     if not clear(session):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no NAS config saved")
+    # 자격증명 제거 후 공유 세션도 정리 (이후 호출은 RuntimeError로 명확히 실패)
+    reset_shared_client()

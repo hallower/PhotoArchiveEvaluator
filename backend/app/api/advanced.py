@@ -27,7 +27,8 @@ from sqlalchemy.orm import Session
 
 from ..ai.exif_strip import strip_exif_jpeg
 from ..ai.remote import keys as api_keys
-from ..ai.remote.registry import MODELS, get_provider, make_adapter
+from ..ai.remote.registry import MODELS, TEXT_DEFAULTS, get_provider, make_adapter
+from ..ai.remote.text import call_text_llm
 from ..auth.dependencies import require_auth
 from ..nas.session import open_dsm_client
 from ..settings_store import (
@@ -251,4 +252,98 @@ def list_models() -> dict:
             }
             for m, info in MODELS.items()
         ],
+    }
+
+
+class _TranslateIn(BaseModel):
+    text: str = Field(min_length=1, max_length=20000)
+    target_lang: str = Field(default="Korean", max_length=40)
+    review_id: int | None = None  # 비용 추적용 (선택)
+
+
+@router.post("/api/advanced/translate")
+def translate_text(body: _TranslateIn, session: Session = Depends(get_session)) -> dict:
+    """고급 평가 결과 등 텍스트를 지정 언어로 번역. 텍스트-only LLM 사용 (저렴한 모델 자동 선택).
+
+    provider 선택 순서:
+      1) 기본 모델의 provider에 키가 있으면 그 provider의 텍스트-기본 모델 사용
+      2) 없으면 TEXT_DEFAULTS에 등록된 다른 provider 중 키가 있는 것 사용
+      3) 어느 provider도 키가 없으면 409
+    """
+    from ..settings_store import get_external_allow_send, get_external_default_model
+
+    if not get_external_allow_send(session):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "external API send is disabled — enable in Settings",
+        )
+
+    default_model = get_external_default_model(session)
+    preferred_provider = get_provider(default_model)
+    # 후보 provider 순서: 선호 provider 먼저, 그 다음 TEXT_DEFAULTS에 등록된 나머지
+    candidates: list[str] = []
+    if preferred_provider:
+        candidates.append(preferred_provider)
+    for p in TEXT_DEFAULTS:
+        if p not in candidates:
+            candidates.append(p)
+
+    provider: str | None = None
+    api_key: str | None = None
+    for p in candidates:
+        k = api_keys.get(p)
+        if k:
+            provider = p
+            api_key = k
+            break
+
+    if provider is None or api_key is None:
+        configured = [p for p in TEXT_DEFAULTS if api_keys.get(p)]
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"no API key registered — configure one in Settings (tried: {', '.join(candidates)}; configured: {configured or 'none'})",
+        )
+
+    text_model = TEXT_DEFAULTS.get(provider, default_model)
+
+    prompt = (
+        f"Translate the following text into {body.target_lang}. "
+        "Preserve formatting (line breaks, bullets, headings). "
+        "Do not add any preamble, explanation, or quotation marks — output the translation only.\n\n"
+        f"---\n{body.text}\n---"
+    )
+
+    try:
+        translated, t_in, t_out = call_text_llm(
+            provider, text_model, api_key, prompt, max_tokens=2048
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.exception("translate failed")
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, f"translate failed: {exc}"
+        ) from exc
+
+    # 비용 기록 (선택)
+    from ..ai.remote.registry import get_price
+
+    in_p, out_p = get_price(text_model)
+    cost = ((t_in or 0) * in_p + (t_out or 0) * out_p) / 1_000_000
+    if cost > 0:
+        session.add(
+            ApiCost(
+                model_id=f"{provider}:{text_model}",
+                photo_id=None,
+                cost_usd=cost,
+                tokens_in=t_in,
+                tokens_out=t_out,
+            )
+        )
+        session.commit()
+
+    return {
+        "translated": translated.strip(),
+        "model": f"{provider}:{text_model}",
+        "tokens_in": t_in,
+        "tokens_out": t_out,
+        "cost_usd": cost,
     }

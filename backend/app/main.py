@@ -34,6 +34,7 @@ from .auth.router import router as auth_router
 from . import scheduler
 from .config import settings
 from .evaluator import loop as evaluator_loop
+from .evaluator.rescore import recalibrate_aesthetic
 from .evaluator.worker import recover_pending
 from .storage.db import SessionLocal
 
@@ -80,6 +81,13 @@ async def lifespan(app: FastAPI):
         recovered = recover_pending(session)
     if recovered:
         logger.info("recovered %d in_progress eval_jobs to pending", recovered)
+    # 미학 정규화 공식이 변경되었을 수 있으므로 raw_score → ai_score 재계산 (idempotent).
+    try:
+        updated = recalibrate_aesthetic(SessionLocal)
+        if updated:
+            logger.info("aesthetic score recalibrated: %d evaluations updated", updated)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("aesthetic recalibration skipped: %s", exc)
     scheduler.start()
     evaluator_loop.start(SessionLocal)
     try:
@@ -87,6 +95,12 @@ async def lifespan(app: FastAPI):
     finally:
         evaluator_loop.stop()
         scheduler.stop()
+        try:
+            from .nas.session import reset_shared_client
+
+            reset_shared_client()
+        except Exception:  # noqa: BLE001
+            logger.warning("DSM shared client cleanup failed", exc_info=True)
 
 
 app = FastAPI(

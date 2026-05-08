@@ -28,6 +28,7 @@ export interface PhotoSummary {
   prompt_raw: number | null;
   user_score: number | null;
   final_score: number | null;
+  advanced_review_count?: number;
   thumb_url: string;
 }
 
@@ -226,6 +227,7 @@ export const api = {
       sort?: string;
       camera?: string;
       q?: string;
+      has_advanced?: boolean | null;
     }) => {
       const qs = new URLSearchParams();
       if (params.limit !== undefined) qs.set("limit", String(params.limit));
@@ -235,6 +237,8 @@ export const api = {
       if (params.sort) qs.set("sort", params.sort);
       if (params.camera) qs.set("camera", params.camera);
       if (params.q) qs.set("q", params.q);
+      if (params.has_advanced !== undefined && params.has_advanced !== null)
+        qs.set("has_advanced", params.has_advanced ? "true" : "false");
       return request<PhotoListResponse>("GET", `/api/photos?${qs.toString()}`);
     },
     detail: (id: number) => request<PhotoDetail>("GET", `/api/photos/${id}`),
@@ -387,6 +391,14 @@ export const api = {
     },
     models: () =>
       request<{ models: ExternalModel[] }>("GET", "/api/advanced/models"),
+    translate: (text: string, target_lang: string = "Korean") =>
+      request<{
+        translated: string;
+        model: string;
+        tokens_in: number | null;
+        tokens_out: number | null;
+        cost_usd: number;
+      }>("POST", "/api/advanced/translate", { text, target_lang }),
   },
   backup: {
     trigger: () =>

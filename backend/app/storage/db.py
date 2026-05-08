@@ -31,12 +31,20 @@ engine = _build_engine()
 
 
 # SQLite는 기본적으로 FK CASCADE를 적용하지 않음. 매 연결마다 활성화해야 함.
+# 또한 WAL 모드 + busy_timeout으로 동시성 처리:
+#   - WAL: 읽기/쓰기 동시 허용 (기본 rollback 모드는 쓰기 시 전체 DB 락)
+#   - busy_timeout: 락 대기 시 즉시 OperationalError 대신 N ms 동안 재시도
+# 스캐너·평가 워커·API가 같은 DB에 동시 쓰기 시 "database is locked" 발생을 막는다.
 if settings.db_url.startswith("sqlite"):
 
     @event.listens_for(engine, "connect")
-    def _enable_sqlite_fk(dbapi_connection, _record):  # type: ignore[no-untyped-def]
+    def _configure_sqlite(dbapi_connection, _record):  # type: ignore[no-untyped-def]
         cur = dbapi_connection.cursor()
         cur.execute("PRAGMA foreign_keys=ON")
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        # 30초까지 락 해제 대기 (스캔 commit이 느릴 때 평가 워커가 즉시 실패하지 않도록).
+        cur.execute("PRAGMA busy_timeout=30000")
         cur.close()
 
 SessionLocal = sessionmaker(

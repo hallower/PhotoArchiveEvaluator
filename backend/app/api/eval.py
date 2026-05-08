@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..auth.dependencies import require_auth
-from ..evaluator.rescore import rescore_prompt
+from ..evaluator.rescore import recalibrate_aesthetic, rescore_prompt
 from ..evaluator.worker import EvaluatorWorker
 from ..settings_store import (
     DEFAULT_EVAL_PROMPT,
@@ -94,3 +94,13 @@ def trigger_rescore_prompt() -> dict:
     )
     thread.start()
     return {"queued": True}
+
+
+@router.post("/recalibrate-aesthetic")
+def trigger_recalibrate_aesthetic() -> dict:
+    """미학 점수 정규화 공식 변경 시 raw_score로부터 ai_score를 재계산.
+
+    모델 forward 없이 곱셈만 — 동기 처리(수만 행도 1초 미만).
+    """
+    updated = recalibrate_aesthetic(SessionLocal)
+    return {"updated": updated}

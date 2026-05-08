@@ -42,6 +42,15 @@ def run_scan(
     folders_payload = json.dumps([{"kind": kind, "path": str(root)}], ensure_ascii=False)
 
     with session_factory() as s:
+        # 동일 folders로 누적된 과거 실패 잡들을 정리. 한 폴더에 수백 개씩 쌓이는 것을 방지.
+        deleted = s.execute(
+            ScanJob.__table__.delete().where(
+                ScanJob.state == "failed",
+                ScanJob.folders == folders_payload,
+            )
+        ).rowcount or 0
+        if deleted:
+            log.info("cleared %d prior failed scan_jobs for folders=%s", deleted, folders_payload)
         job = ScanJob(state="running", folders=folders_payload)
         s.add(job)
         s.commit()

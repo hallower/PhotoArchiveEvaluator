@@ -100,14 +100,26 @@ def retry_scan_job(job_id: int, session: Session = Depends(get_session)) -> dict
 
 @router.post("/retry-failed", status_code=status.HTTP_202_ACCEPTED)
 def retry_failed(session: Session = Depends(get_session)) -> dict:
-    """state=failed인 모든 잡을 재시작. 즉시 실행 (사용자 강제 트리거)."""
+    """state=failed인 모든 잡을 재시작. 즉시 실행 (사용자 강제 트리거).
+
+    동일 folders payload는 1번만 재시도(같은 폴더에 누적된 실패 잡이 N개여도 N번 안 돌게).
+    """
     rows = session.execute(
         select(ScanJob).where(ScanJob.state == "failed")
     ).scalars().all()
+    seen_folders: set[str] = set()
     started = 0
     for job in rows:
+        if job.folders in seen_folders:
+            continue
+        seen_folders.add(job.folders)
         started += start_scans_for_job(SessionLocal, job.folders)
-    return {"queued": True, "retried_jobs": len(rows), "started_scans": started}
+    return {
+        "queued": True,
+        "retried_jobs": len(rows),
+        "deduped_unique": len(seen_folders),
+        "started_scans": started,
+    }
 
 
 class _BulkDeleteJobs(BaseModel):
