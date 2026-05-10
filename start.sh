@@ -24,6 +24,8 @@ Options:
                          - 임베딩 없는 사진: basic eval 잡으로 큐잉 (워커가 처리)
                        다큐 기능 처음 설치 후, 또는 documentary prompt 변경 후 사용.
   --rescore-prompt     prompt CLIP 점수 백필. 설정에서 eval prompt를 바꾼 뒤 사용.
+  --scan               서버 시작 후 저장된 폴더를 자동 재스캔. DB에 등록된 모든
+                       사진의 부모 폴더를 walk해 새 사진을 발견하면 평가 큐에 등록.
 
 Env vars:
   PAE_HOST   바인드 호스트 (기본 0.0.0.0 — LAN 접근)
@@ -47,6 +49,7 @@ EOF
 DO_BUILD=1
 RESCORE_DOC=0
 RESCORE_PROMPT=0
+DO_SCAN=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -54,6 +57,7 @@ while [[ $# -gt 0 ]]; do
     --no-build) DO_BUILD=0 ;;
     --rescore-doc) RESCORE_DOC=1 ;;
     --rescore-prompt) RESCORE_PROMPT=1 ;;
+    --scan) DO_SCAN=1 ;;
     *)
       echo "ERROR: unknown argument: $1" >&2
       echo 'run "./start.sh --help" to see options' >&2
@@ -110,6 +114,10 @@ fi
 # ── 5. uvicorn ───────────────────────────────────────────────
 HOST="${PAE_HOST:-0.0.0.0}"
 PORT="${PAE_PORT:-8770}"
+if [ "$DO_SCAN" -eq 1 ]; then
+  echo "[scan] PAE_AUTOSCAN=1 — 서버 시작 후 저장된 폴더 자동 재스캔"
+  export PAE_AUTOSCAN=1
+fi
 echo "[run] http://${HOST}:${PORT}  (Ctrl+C 로 종료)"
 cd backend
 exec ./.venv/bin/python -m uvicorn app.main:app --host "${HOST}" --port "${PORT}"

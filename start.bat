@@ -13,6 +13,7 @@ REM ── Parse args ───────────────────�
 set DO_BUILD=1
 set RESCORE_DOC=0
 set RESCORE_PROMPT=0
+set DO_SCAN=0
 
 :parse_args
 if "%~1"=="" goto end_parse
@@ -22,6 +23,7 @@ if /i "%~1"=="/?" goto show_help
 if /i "%~1"=="--no-build" (set DO_BUILD=0) & goto next_arg
 if /i "%~1"=="--rescore-doc" (set RESCORE_DOC=1) & goto next_arg
 if /i "%~1"=="--rescore-prompt" (set RESCORE_PROMPT=1) & goto next_arg
+if /i "%~1"=="--scan" (set DO_SCAN=1) & goto next_arg
 echo ERROR: unknown argument: %~1 1>&2
 echo run "start.bat --help" to see options 1>&2
 exit /b 2
@@ -97,6 +99,10 @@ if "%RESCORE_PROMPT%"=="1" (
 REM ── 5. uvicorn ───────────────────────────────────────────────
 if "%PAE_HOST%"=="" set PAE_HOST=0.0.0.0
 if "%PAE_PORT%"=="" set PAE_PORT=8770
+if "%DO_SCAN%"=="1" (
+  echo [scan] PAE_AUTOSCAN=1 — server will rescan saved paths after startup.
+  set PAE_AUTOSCAN=1
+)
 echo [run] http://%PAE_HOST%:%PAE_PORT%   ^(Ctrl+C to stop^)
 cd backend
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host %PAE_HOST% --port %PAE_PORT%
@@ -121,6 +127,10 @@ echo                        Use after first installing the documentary feature o
 echo                        after changing the documentary prompt in Settings.
 echo   --rescore-prompt     Backfill prompt CLIP scores. Use after changing the
 echo                        eval prompt in Settings.
+echo   --scan               After server starts, automatically re-scan all saved
+echo                        folders (parent directories of every photo in DB) to
+echo                        pick up newly added photos. New photos enter the eval
+echo                        queue and get scored in the background.
 echo.
 echo Environment variables:
 echo   PAE_HOST   bind host (default 0.0.0.0; LAN access)

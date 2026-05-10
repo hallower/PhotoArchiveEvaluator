@@ -88,6 +88,19 @@ async def lifespan(app: FastAPI):
             logger.info("aesthetic score recalibrated: %d evaluations updated", updated)
     except Exception as exc:  # noqa: BLE001
         logger.warning("aesthetic recalibration skipped: %s", exc)
+    # PAE_AUTOSCAN=1 이면 시작 시 저장된 폴더를 자동 재스캔 (start.bat --scan에서 사용).
+    if os.environ.get("PAE_AUTOSCAN", "").lower() in ("1", "true", "yes"):
+        try:
+            from .scanner.dispatch import scan_saved_paths
+
+            r = scan_saved_paths(SessionLocal)
+            logger.info(
+                "PAE_AUTOSCAN: started local=%d dsm=%d (paths=%d/%d)",
+                r["started"]["local"], r["started"]["dsm"],
+                len(r["local_paths"]), len(r["dsm_paths"]),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("PAE_AUTOSCAN failed: %s", exc)
     scheduler.start()
     evaluator_loop.start(SessionLocal)
     try:

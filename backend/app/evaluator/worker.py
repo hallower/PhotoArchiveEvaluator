@@ -25,8 +25,7 @@ from sqlalchemy.orm import Session
 
 from ..ai.base import CaptionModel, ScoreModel, TagModel
 from ..ai.embed import EmbeddingModel, cosine_similarity
-from ..nas.dsm import DSMClient
-from ..nas.session import open_dsm_client
+from ..nas.session import get_shared_client
 from ..settings_store import get_documentary_prompt, get_eval_prompt
 from ..storage.models import Embedding, EvalJob, Evaluation, PhotoPath, PhotoTag, Tag
 
@@ -38,9 +37,6 @@ MAX_ATTEMPTS = 3
 # 깨질 수 있어 단일 GPU에서는 lock으로 직렬화한다. 모델 forward 자체는 짧고
 # (~0.7s), I/O(다운로드, DB)는 lock 밖에서 병렬 진행되므로 다중 워커 효과가 있다.
 _gpu_lock = threading.Lock()
-
-# DSM 클라이언트 초기화 race 방지
-_dsm_init_lock = threading.Lock()
 
 
 def _utc_now() -> datetime:
@@ -109,7 +105,6 @@ class EvaluatorWorker:
         self._embed_model = embed_model
         self._caption_model = caption_model
         self._tag_model = tag_model
-        self._dsm_client: DSMClient | None = None
         # 동일 프롬프트의 CLIP text embedding을 캐시 (prompt → vec).
         # eval(미학)/documentary 두 슬롯이 독립적으로 캐시된다.
         self._text_vec_cache: dict[str, bytes] = {}
@@ -152,26 +147,18 @@ class EvaluatorWorker:
         return result.vector
 
     def run(self, max_jobs: int | None = None) -> int:
-        """큐를 처리한다. 처리한 작업 수 반환. pending이 비면 즉시 종료."""
-        processed = 0
-        try:
-            while max_jobs is None or processed < max_jobs:
-                with self._session_factory() as s:
-                    got_one = self._process_one(s)
-                if not got_one:
-                    break
-                processed += 1
-        finally:
-            self._close_dsm()
-        return processed
+        """큐를 처리한다. 처리한 작업 수 반환. pending이 비면 즉시 종료.
 
-    def _close_dsm(self) -> None:
-        if self._dsm_client is not None:
-            try:
-                self._dsm_client.logout()
-            finally:
-                self._dsm_client._client.close()
-                self._dsm_client = None
+        DSM 클라이언트는 프로세스 전역 공유 — 워커 종료 시 logout/close 하지 않음.
+        """
+        processed = 0
+        while max_jobs is None or processed < max_jobs:
+            with self._session_factory() as s:
+                got_one = self._process_one(s)
+            if not got_one:
+                break
+            processed += 1
+        return processed
 
     def _process_one(self, session: Session) -> bool:
         job = session.execute(
@@ -297,15 +284,9 @@ class EvaluatorWorker:
                 raise FileNotFoundError(f"file missing: {path}")
             return path.read_bytes()
         if pp.nas_id.startswith("dsm:"):
-            return self._dsm(session).download(pp.path)
+            # 공유 DSMClient — 프로세스에 1번 로그인. SID 만료 시 자동 재로그인.
+            return get_shared_client().download(pp.path)
         raise ValueError(f"unsupported nas_id: {pp.nas_id}")
-
-    def _dsm(self, session: Session) -> DSMClient:
-        if self._dsm_client is None:
-            with _dsm_init_lock:
-                if self._dsm_client is None:
-                    self._dsm_client = open_dsm_client(session)
-        return self._dsm_client
 
 
 def _upsert_tags(session: Session, photo_id: int, tag_items) -> None:

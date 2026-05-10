@@ -297,63 +297,12 @@ def delete_api_key(provider: str) -> None:
 @router.post("/scan-saved", status_code=status.HTTP_202_ACCEPTED)
 def scan_saved(session: Session = Depends(get_session)) -> dict:
     """스캔된 사진의 부모 폴더(DB)를 모두 재스캔. topmost만 walk해 중복 회피."""
-    rows = session.execute(select(PhotoPath.nas_id, PhotoPath.path)).all()
-    local_set: set[str] = set()
-    dsm_set: set[str] = set()
-    for nas_id, path in rows:
-        parent = _parent_dir(nas_id, path)
-        if not parent:
-            continue
-        if nas_id == "local":
-            local_set.add(parent)
-        elif nas_id.startswith("dsm:"):
-            dsm_set.add(parent)
+    from ..scanner.dispatch import scan_saved_paths
 
-    local_paths = _topmost(local_set, ("\\", "/"))
-    dsm_paths = _topmost(dsm_set, ("/",))
-
-    if not local_paths and not dsm_paths:
+    result = scan_saved_paths(SessionLocal)
+    if not result["local_paths"] and not result["dsm_paths"]:
         raise HTTPException(
-            status.HTTP_409_CONFLICT, "no scanned photos in DB — start with NAS/local 스캔 button"
+            status.HTTP_409_CONFLICT,
+            "no scanned photos in DB — start with NAS/local 스캔 button",
         )
-
-    # 로컬 스캐너는 경로별 스레드 1개. NAS는 동일 세션 내 순차 처리(부하 보호).
-    started = {"local": 0, "dsm": 0}
-
-    for raw in local_paths:
-        p = Path(raw).resolve()
-        if not p.is_dir():
-            continue
-        scanner = LocalScanner(SessionLocal)
-        threading.Thread(
-            target=scanner.scan,
-            args=(p,),
-            daemon=True,
-            name="scan-local-saved",
-        ).start()
-        started["local"] += 1
-
-    if dsm_paths:
-        config = load_config(session)
-        password = load_password(config.username) if config else None
-        if config and password:
-            device_id = load_device_id(config.username)
-
-            def _run_dsm_chain(paths: list[str]) -> None:
-                # 단일 세션으로 모든 NAS 폴더 순차 스캔 — 매 폴더마다 새 로그인하지 않게
-                scanner = DSMScanner(SessionLocal, config, password, device_id=device_id)
-                for path in paths:
-                    try:
-                        scanner.scan(path)
-                    except Exception:  # noqa: BLE001
-                        pass
-
-            threading.Thread(
-                target=_run_dsm_chain,
-                args=(dsm_paths,),
-                daemon=True,
-                name="scan-dsm-saved",
-            ).start()
-            started["dsm"] = len(dsm_paths)
-
-    return {"queued": True, "started": started}
+    return {"queued": True, "started": result["started"]}

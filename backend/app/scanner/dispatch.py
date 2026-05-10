@@ -8,14 +8,18 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import posixpath
 import re
 import threading
 from collections.abc import Callable
 from pathlib import Path
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..nas.credentials import load_config, load_device_id, load_password
+from ..storage.models import PhotoPath
 from .dsm import DSMScanner
 from .local import LocalScanner
 
@@ -106,3 +110,94 @@ def start_scans_for_job(session_factory: Callable[[], Session], folders_json: st
         if start_scan(session_factory, item):
             started += 1
     return started
+
+
+def _parent_dir(nas_id: str, path: str) -> str:
+    """경로의 부모 디렉터리. local은 OS-aware, DSM은 POSIX."""
+    if nas_id == "local":
+        return os.path.dirname(path) or path
+    return posixpath.dirname(path) or path
+
+
+def _topmost(paths: set[str], sep_chars: tuple[str, ...]) -> list[str]:
+    """다른 path의 조상이 되는 path만 남김 (descendant 제거)."""
+    sorted_paths = sorted(paths)
+    out: list[str] = []
+    for p in sorted_paths:
+        is_descendant = any(p.startswith(r + s) for r in out for s in sep_chars)
+        if not is_descendant:
+            out.append(p)
+    return out
+
+
+def scan_saved_paths(session_factory: Callable[[], Session]) -> dict:
+    """DB에 등록된 모든 사진의 부모 폴더(top-most)를 재스캔. 비동기 — 스레드로 시작 후 즉시 반환.
+
+    /api/settings/scan-saved 엔드포인트와 동일한 로직을 함수로 추출 — CLI 런처
+    (start.bat --scan)와 lifespan 자동 트리거에서도 재사용한다.
+    """
+    with session_factory() as session:
+        rows = session.execute(select(PhotoPath.nas_id, PhotoPath.path)).all()
+
+    local_set: set[str] = set()
+    dsm_set: set[str] = set()
+    for nas_id, path in rows:
+        parent = _parent_dir(nas_id, path)
+        if not parent:
+            continue
+        if nas_id == "local":
+            local_set.add(parent)
+        elif nas_id.startswith("dsm:"):
+            dsm_set.add(parent)
+
+    local_paths = _topmost(local_set, ("\\", "/"))
+    dsm_paths = _topmost(dsm_set, ("/",))
+
+    started = {"local": 0, "dsm": 0}
+
+    for raw in local_paths:
+        p = Path(raw).resolve()
+        if not p.is_dir():
+            continue
+        scanner = LocalScanner(session_factory)
+        threading.Thread(
+            target=scanner.scan,
+            args=(p,),
+            daemon=True,
+            name="scan-local-saved",
+        ).start()
+        started["local"] += 1
+
+    if dsm_paths:
+        with session_factory() as session:
+            config = load_config(session)
+        password = load_password(config.username) if config else None
+        if config and password:
+            device_id = load_device_id(config.username)
+
+            def _run_dsm_chain(paths: list[str]) -> None:
+                # 단일 호출자(공유 DSMClient + host_lock)로 순차 진행 — NAS 부하 보호.
+                scanner = DSMScanner(session_factory, config, password, device_id=device_id)
+                for path in paths:
+                    try:
+                        scanner.scan(path)
+                    except Exception:  # noqa: BLE001
+                        log.exception("dsm scan-saved failed for %s", path)
+
+            threading.Thread(
+                target=_run_dsm_chain,
+                args=(dsm_paths,),
+                daemon=True,
+                name="scan-dsm-saved",
+            ).start()
+            started["dsm"] = len(dsm_paths)
+
+    log.info(
+        "scan_saved_paths: local_paths=%d dsm_paths=%d started=%s",
+        len(local_paths), len(dsm_paths), started,
+    )
+    return {
+        "local_paths": local_paths,
+        "dsm_paths": dsm_paths,
+        "started": started,
+    }
