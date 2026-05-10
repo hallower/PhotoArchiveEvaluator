@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from ..auth.dependencies import require_auth
 from ..config import settings
+from ..evaluator.cluster import cluster_by_phash, group_clusters
 from ..nas.session import open_dsm_client
 from ..storage.db import get_session
 from ..storage.models import (
@@ -72,6 +73,12 @@ def list_photos(
     has_advanced: bool | None = Query(
         None, description="True=고급 평가 있는 것만, False=없는 것만, None=전체"
     ),
+    cluster: bool = Query(
+        False, description="True면 pHash 기반으로 유사 사진을 묶어서 반환"
+    ),
+    cluster_distance: int = Query(
+        8, ge=0, le=32, description="클러스터링 hamming 임계값 (0=동일, 8=기본, 클수록 느슨)"
+    ),
     sort: str = "-taken_at",
 ) -> dict:
     if sort not in _SORT_OPTIONS:
@@ -111,6 +118,7 @@ def list_photos(
         select(
             Photo.id,
             Photo.sha256,
+            Photo.phash,
             Photo.taken_at,
             Photo.camera_make,
             Photo.camera_model,
@@ -177,13 +185,10 @@ def list_photos(
         "-id": desc(Photo.id),
         "id": asc(Photo.id),
     }[sort]
-    paged = base.order_by(sort_col).offset(offset).limit(limit)
 
-    total = session.execute(select(func.count()).select_from(base.subquery())).scalar() or 0
-    rows = session.execute(paged).all()
-
-    items = [
-        {
+    def _row_to_photo(r) -> dict:
+        return {
+            "type": "photo",
             "id": r.id,
             "sha256": r.sha256,
             "taken_at": r.taken_at.isoformat() if r.taken_at else None,
@@ -209,9 +214,63 @@ def list_photos(
             "advanced_review_count": int(r.advanced_review_count or 0),
             "thumb_url": f"/api/photos/{r.id}/thumb",
         }
-        for r in rows
-    ]
-    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+    if not cluster:
+        paged = base.order_by(sort_col).offset(offset).limit(limit)
+        total = session.execute(select(func.count()).select_from(base.subquery())).scalar() or 0
+        rows = session.execute(paged).all()
+        return {
+            "items": [_row_to_photo(r) for r in rows],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+
+    # 클러스터 모드: 필터링된 전체 행을 가져와 pHash로 묶고, 그 다음 sort/page.
+    # 정렬은 클러스터 단위로 적용 (대표 = 가장 높은 final_score 멤버).
+    all_rows = session.execute(base.order_by(sort_col)).all()
+    cluster_map = cluster_by_phash(
+        ((r.id, r.phash) for r in all_rows), max_distance=cluster_distance
+    )
+    groups = group_clusters(cluster_map)
+    rows_by_id = {r.id: r for r in all_rows}
+
+    def _final_or_zero(r) -> float:
+        return float(r.final_score) if r.final_score is not None else 0.0
+
+    items_full: list[dict] = []
+    seen_roots: set[int] = set()
+    # all_rows는 sort 기준으로 이미 정렬됨 — 처음 등장 순서가 곧 출력 순서.
+    for r in all_rows:
+        root = cluster_map.get(r.id, r.id)
+        if root in seen_roots:
+            continue
+        seen_roots.add(root)
+        member_ids = groups.get(root, [r.id])
+        if len(member_ids) <= 1:
+            items_full.append(_row_to_photo(r))
+            continue
+        members_rows = [rows_by_id[mid] for mid in member_ids if mid in rows_by_id]
+        members_rows.sort(key=_final_or_zero, reverse=True)
+        members_serialized = [_row_to_photo(mr) for mr in members_rows]
+        items_full.append(
+            {
+                "type": "cluster",
+                "cluster_id": int(root),
+                "count": len(members_serialized),
+                "members": members_serialized,
+            }
+        )
+
+    total = len(items_full)
+    items_paged = items_full[offset : offset + limit]
+    return {
+        "items": items_paged,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "clustered": True,
+    }
 
 
 @router.get("/score-distribution")

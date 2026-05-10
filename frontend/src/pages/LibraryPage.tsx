@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, type PhotoSummary, type PortfolioSummary, type QueueCounts } from "../api";
+import {
+  api,
+  type ClusterItem,
+  type LibraryItem,
+  type PhotoSummary,
+  type PortfolioSummary,
+  type QueueCounts,
+} from "../api";
 import { ContestsPage } from "./ContestsPage";
 import { PhotoModal } from "./PhotoModal";
 import { PortfoliosPage } from "./PortfoliosPage";
@@ -17,18 +24,21 @@ const SORT_OPTIONS = [
 ];
 
 export function LibraryPage({ onLogout }: { onLogout: () => void }) {
-  const [photos, setPhotos] = useState<PhotoSummary[]>([]);
+  const [items, setItems] = useState<LibraryItem[]>([]);
   const [total, setTotal] = useState(0);
   const [minScore, setMinScore] = useState<number>(80.0);
   const [sort, setSort] = useState<string>("-score");
   const [loading, setLoading] = useState(false);
   const [openPhotoId, setOpenPhotoId] = useState<number | null>(null);
+  const [openCluster, setOpenCluster] = useState<ClusterItem | null>(null);
   const [queue, setQueue] = useState<QueueCounts | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchActive, setSearchActive] = useState(false);
   const [keyword, setKeyword] = useState("");
   const [advancedFilter, setAdvancedFilter] = useState<"all" | "with" | "without">("all");
+  const [clusterMode, setClusterMode] = useState(false);
+  const [clusterDistance, setClusterDistance] = useState<number>(8);
   const [selected, setSelectedSet] = useState<Set<number>>(new Set());
   const [showPortfolios, setShowPortfolios] = useState(false);
   const [portfolios, setPortfolios] = useState<PortfolioSummary[]>([]);
@@ -42,7 +52,14 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
       return next;
     });
   const clearSelection = () => setSelectedSet(new Set());
-  const selectAll = () => setSelectedSet(new Set(photos.map((p) => p.id)));
+  const selectAll = () =>
+    setSelectedSet(
+      new Set(
+        items.flatMap((it) =>
+          it.type === "cluster" ? it.members.map((m) => m.id) : [it.id],
+        ),
+      ),
+    );
 
   const fetchList = useCallback(async () => {
     setLoading(true);
@@ -54,14 +71,16 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
         q: keyword.trim() || undefined,
         has_advanced:
           advancedFilter === "with" ? true : advancedFilter === "without" ? false : undefined,
+        cluster: clusterMode || undefined,
+        cluster_distance: clusterMode ? clusterDistance : undefined,
       });
-      setPhotos(res.items);
+      setItems(res.items);
       setTotal(res.total);
       setSearchActive(false);
     } finally {
       setLoading(false);
     }
-  }, [minScore, sort, keyword, advancedFilter]);
+  }, [minScore, sort, keyword, advancedFilter, clusterMode, clusterDistance]);
 
   // 첫 진입 시 settings에서 임계값 로드
   useEffect(() => {
@@ -83,7 +102,8 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
     try {
       const res = await api.photos.search(q, 100);
       // search 응답은 PhotoSummary 호환 — 부족 필드 보강
-      const items: PhotoSummary[] = res.items.map((it) => ({
+      const photos: PhotoSummary[] = res.items.map((it) => ({
+        type: "photo",
         id: it.id,
         sha256: "",
         taken_at: it.taken_at,
@@ -108,7 +128,7 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
         final_score: it.similarity,
         thumb_url: it.thumb_url,
       }));
-      setPhotos(items);
+      setItems(photos);
       setTotal(res.total);
     } finally {
       setLoading(false);
@@ -353,6 +373,51 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
             <option value="without">없는 것만</option>
           </select>
         </label>
+        <label style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 6 }}>
+          <input
+            type="checkbox"
+            checked={clusterMode}
+            onChange={(e) => setClusterMode(e.target.checked)}
+            disabled={searchActive}
+            style={{ margin: 0, padding: 0 }}
+          />
+          <span>유사 사진 묶기</span>
+        </label>
+        {clusterMode && (
+          <label style={{ minWidth: 200 }}>
+            유사도 ({clusterDistance})
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "center",
+              }}
+            >
+              <input
+                type="range"
+                min={2}
+                max={20}
+                step={1}
+                value={clusterDistance}
+                onChange={(e) => setClusterDistance(parseInt(e.target.value, 10))}
+                disabled={searchActive}
+                style={{ flex: 1, padding: 0 }}
+                title={`hamming distance ≤ ${clusterDistance} (작을수록 엄격)`}
+              />
+              <select
+                value={String(clusterDistance)}
+                onChange={(e) => setClusterDistance(parseInt(e.target.value, 10))}
+                disabled={searchActive}
+                style={{ padding: "2px 6px", fontSize: 12 }}
+              >
+                <option value="4">4 (엄격)</option>
+                <option value="8">8 (기본)</option>
+                <option value="12">12 (느슨)</option>
+                <option value="16">16 (매우 느슨)</option>
+              </select>
+            </div>
+          </label>
+        )}
         {searchActive && (
           <button
             className="ghost"
@@ -411,22 +476,43 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
         </div>
       )}
 
-      {loading && photos.length === 0 ? (
+      {loading && items.length === 0 ? (
         <div className="empty">불러오는 중...</div>
-      ) : photos.length === 0 ? (
+      ) : items.length === 0 ? (
         <div className="empty">조건에 맞는 사진이 없습니다.</div>
       ) : (
         <div className="grid">
-          {photos.map((p) => (
-            <Card
-              key={p.id}
-              photo={p}
-              isSelected={selected.has(p.id)}
-              onToggleSelect={() => toggleSelected(p.id)}
-              onClick={() => setOpenPhotoId(p.id)}
-            />
-          ))}
+          {items.map((it) =>
+            it.type === "cluster" ? (
+              <ClusterCard
+                key={`c-${it.cluster_id}`}
+                cluster={it}
+                onClick={() => setOpenCluster(it)}
+              />
+            ) : (
+              <Card
+                key={it.id}
+                photo={it}
+                isSelected={selected.has(it.id)}
+                onToggleSelect={() => toggleSelected(it.id)}
+                onClick={() => setOpenPhotoId(it.id)}
+              />
+            ),
+          )}
         </div>
+      )}
+
+      {openCluster && (
+        <ClusterDetailModal
+          cluster={openCluster}
+          isSelected={(id) => selected.has(id)}
+          onToggleSelect={toggleSelected}
+          onOpenPhoto={(id) => {
+            setOpenCluster(null);
+            setOpenPhotoId(id);
+          }}
+          onClose={() => setOpenCluster(null)}
+        />
       )}
 
       {openPhotoId !== null && (
@@ -560,6 +646,157 @@ function Card({
         <span>
           {photo.taken_at ? new Date(photo.taken_at).toLocaleDateString("ko-KR") : "-"}
         </span>
+      </div>
+    </div>
+  );
+}
+
+function ClusterCard({
+  cluster,
+  onClick,
+}: {
+  cluster: ClusterItem;
+  onClick: () => void;
+}) {
+  const preview = cluster.members[0];
+  return (
+    <div
+      className="card"
+      onClick={onClick}
+      style={{ position: "relative" }}
+      title={`유사 사진 ${cluster.count}장`}
+    >
+      {/* 스택 효과: 뒤쪽 두 장이 살짝 어긋나 보이도록 */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background: "var(--panel)",
+          border: "1px solid var(--border)",
+          borderRadius: 8,
+          transform: "translate(6px, 6px)",
+          zIndex: 0,
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background: "var(--panel-2)",
+          border: "1px solid var(--border)",
+          borderRadius: 8,
+          transform: "translate(3px, 3px)",
+          zIndex: 0,
+        }}
+      />
+      <div style={{ position: "relative", zIndex: 1 }}>
+        <img
+          src={preview.thumb_url}
+          alt={`cluster ${cluster.cluster_id}`}
+          className="thumb"
+          loading="lazy"
+        />
+        <div
+          style={{
+            position: "absolute",
+            top: 6,
+            left: 6,
+            background: "rgba(0,0,0,0.7)",
+            color: "white",
+            padding: "3px 9px",
+            borderRadius: 12,
+            fontSize: 11,
+            fontWeight: 700,
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+          }}
+        >
+          ▣ {cluster.count}
+        </div>
+        <div className="info">
+          <span style={{ color: "var(--text-dim)" }}>유사 {cluster.count}장</span>
+          <span>
+            {preview.taken_at
+              ? new Date(preview.taken_at).toLocaleDateString("ko-KR")
+              : "-"}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ClusterDetailModal({
+  cluster,
+  isSelected,
+  onToggleSelect,
+  onOpenPhoto,
+  onClose,
+}: {
+  cluster: ClusterItem;
+  isSelected: (id: number) => boolean;
+  onToggleSelect: (id: number) => void;
+  onOpenPhoto: (id: number) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="modal-bg" onClick={onClose} style={{ zIndex: 90 }}>
+      <div
+        className="modal"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          flexDirection: "column",
+          maxWidth: 1000,
+          width: "100%",
+          maxHeight: "90vh",
+          padding: 0,
+        }}
+      >
+        <div
+          style={{
+            padding: "14px 18px",
+            borderBottom: "1px solid var(--border)",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            flex: "0 0 auto",
+          }}
+        >
+          <h3 style={{ margin: 0, fontSize: 14 }}>
+            유사 사진 그룹 — {cluster.count}장
+          </h3>
+          <button className="ghost" onClick={onClose} style={{ fontSize: 12 }}>
+            닫기
+          </button>
+        </div>
+        <div
+          style={{
+            padding: 14,
+            overflowY: "auto",
+            flex: "1 1 auto",
+          }}
+        >
+          <div className="grid" style={{ padding: 0 }}>
+            {cluster.members.map((p) => (
+              <Card
+                key={p.id}
+                photo={p}
+                isSelected={isSelected(p.id)}
+                onToggleSelect={() => onToggleSelect(p.id)}
+                onClick={() => onOpenPhoto(p.id)}
+              />
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );

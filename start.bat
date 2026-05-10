@@ -2,8 +2,8 @@
 REM Photo Archive Evaluator launcher (Windows).
 REM
 REM Usage:
-REM   start.bat            : build frontend if dist missing, then run uvicorn
-REM   start.bat --rebuild  : force frontend rebuild
+REM   start.bat            : build frontend, then run uvicorn (default)
+REM   start.bat --no-build : skip frontend build (fast restart)
 REM
 REM Env vars:
 REM   PAE_HOST  bind host (default 0.0.0.0 -- LAN access)
@@ -43,11 +43,10 @@ if not exist "frontend\node_modules" (
   popd
 )
 
-REM 3. frontend dist build -- when missing or --rebuild
-set REBUILD=0
-if "%~1"=="--rebuild" set REBUILD=1
-if not exist "frontend\dist\index.html" set REBUILD=1
-if "%REBUILD%"=="1" (
+REM 3. frontend dist build -- always, unless --no-build
+set DO_BUILD=1
+if "%~1"=="--no-build" set DO_BUILD=0
+if "%DO_BUILD%"=="1" (
   echo [build] building frontend...
   pushd frontend
   call npm run build
@@ -57,6 +56,12 @@ if "%REBUILD%"=="1" (
     exit /b 1
   )
   popd
+) else (
+  if not exist "frontend\dist\index.html" (
+    echo ERROR: --no-build but frontend\dist\index.html missing. Run without --no-build first. 1>&2
+    exit /b 1
+  )
+  echo [build] skipped ^(--no-build^)
 )
 
 REM 4. run uvicorn

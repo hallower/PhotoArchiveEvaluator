@@ -3,8 +3,8 @@
 # Photo Archive Evaluator 단일 명령 런처 (Linux / macOS / WSL).
 #
 # 사용:
-#   ./start.sh              # frontend dist 없으면 빌드, uvicorn 실행
-#   ./start.sh --rebuild    # frontend 강제 재빌드 후 실행
+#   ./start.sh              # frontend 빌드 + uvicorn 실행 (기본)
+#   ./start.sh --no-build   # 빌드 건너뛰고 빠른 재기동
 #
 # 환경변수:
 #   PAE_HOST  바인드 호스트 (기본: 0.0.0.0 — LAN 접근 허용)
@@ -34,8 +34,14 @@ if [ ! -d "frontend/node_modules" ]; then
   (cd frontend && npm install)
 fi
 
-# 3. frontend dist 빌드 — 없거나 --rebuild 시
-if [ "${1:-}" = "--rebuild" ] || [ ! -f "frontend/dist/index.html" ]; then
+# 3. frontend dist 빌드 — 기본 항상 빌드, --no-build 시만 건너뜀
+if [ "${1:-}" = "--no-build" ]; then
+  if [ ! -f "frontend/dist/index.html" ]; then
+    echo "ERROR: --no-build 인데 frontend/dist 가 없습니다. 처음 1회는 인자 없이 실행하세요." >&2
+    exit 1
+  fi
+  echo "[build] 건너뜀 (--no-build)"
+else
   echo "[build] frontend 빌드…"
   (cd frontend && npm run build)
 fi

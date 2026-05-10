@@ -6,6 +6,7 @@ export interface AuthStatus {
 }
 
 export interface PhotoSummary {
+  type?: "photo";
   id: number;
   sha256: string;
   taken_at: string | null;
@@ -95,11 +96,21 @@ export interface ContestMatches {
   note?: string;
 }
 
+export interface ClusterItem {
+  type: "cluster";
+  cluster_id: number;
+  count: number;
+  members: PhotoSummary[];
+}
+
+export type LibraryItem = PhotoSummary | ClusterItem;
+
 export interface PhotoListResponse {
-  items: PhotoSummary[];
+  items: LibraryItem[];
   total: number;
   limit: number;
   offset: number;
+  clustered?: boolean;
 }
 
 export interface EvaluationDetail {
@@ -228,6 +239,8 @@ export const api = {
       camera?: string;
       q?: string;
       has_advanced?: boolean | null;
+      cluster?: boolean;
+      cluster_distance?: number;
     }) => {
       const qs = new URLSearchParams();
       if (params.limit !== undefined) qs.set("limit", String(params.limit));
@@ -239,6 +252,9 @@ export const api = {
       if (params.q) qs.set("q", params.q);
       if (params.has_advanced !== undefined && params.has_advanced !== null)
         qs.set("has_advanced", params.has_advanced ? "true" : "false");
+      if (params.cluster) qs.set("cluster", "true");
+      if (params.cluster_distance !== undefined)
+        qs.set("cluster_distance", String(params.cluster_distance));
       return request<PhotoListResponse>("GET", `/api/photos?${qs.toString()}`);
     },
     detail: (id: number) => request<PhotoDetail>("GET", `/api/photos/${id}`),
