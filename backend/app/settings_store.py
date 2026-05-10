@@ -15,6 +15,7 @@ from .storage.models import Setting
 
 # 키 상수
 EVAL_PROMPT = "eval.prompt"
+EVAL_DOCUMENTARY_PROMPT = "eval.documentary_prompt"
 EVAL_MAX_WORKERS = "eval.max_workers"
 EXTERNAL_ALLOW_SEND = "external.allow_send"
 EXTERNAL_STRIP_EXIF = "external.strip_exif"
@@ -27,6 +28,12 @@ DEFAULT_EVAL_PROMPT = (
     "a high-quality aesthetic photograph with strong composition, "
     "balanced lighting, mood, and emotional impact, suitable for "
     "a photography portfolio or contest"
+)
+DEFAULT_DOCUMENTARY_PROMPT = (
+    "a powerful documentary photograph capturing an authentic "
+    "decisive moment of real human life — candid, photojournalistic, "
+    "showing social reality, emotional truth, and storytelling depth, "
+    "suitable for a photo essay or photojournalism portfolio"
 )
 DEFAULT_MIN_SCORE = 80.0  # 0-100 스케일. raw 6.2 ≈ 80 (strong photo)
 DEFAULT_MAX_WORKERS = 2  # GPU 1개 + 다운로드 오버랩 가정 시 2가 sweet spot
@@ -65,6 +72,13 @@ def set_value(session: Session, key: str, value: str) -> None:
 
 def get_eval_prompt(session: Session) -> str:
     return get(session, EVAL_PROMPT, default=DEFAULT_EVAL_PROMPT) or DEFAULT_EVAL_PROMPT
+
+
+def get_documentary_prompt(session: Session) -> str:
+    return (
+        get(session, EVAL_DOCUMENTARY_PROMPT, default=DEFAULT_DOCUMENTARY_PROMPT)
+        or DEFAULT_DOCUMENTARY_PROMPT
+    )
 
 
 def get_min_score(session: Session) -> float:

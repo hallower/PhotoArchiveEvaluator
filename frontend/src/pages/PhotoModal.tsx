@@ -15,6 +15,7 @@ export function PhotoModal({
   >(null);
   const [selectedPaths, setSelectedPaths] = useState<Set<number>>(new Set());
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showPanel, setShowPanel] = useState(false);
   const [advReviews, setAdvReviews] = useState<AdvancedReview[]>([]);
   const [showReviewsModal, setShowReviewsModal] = useState(false);
 
@@ -128,8 +129,11 @@ export function PhotoModal({
     }
   };
 
-  const aest = detail?.evaluations.find((e) => e.model_id !== "clip-prompt");
+  const aest = detail?.evaluations.find(
+    (e) => e.model_id !== "clip-prompt" && e.model_id !== "clip-documentary",
+  );
   const promptEval = detail?.evaluations.find((e) => e.model_id === "clip-prompt");
+  const docEval = detail?.evaluations.find((e) => e.model_id === "clip-documentary");
   const userScore = detail?.user_score ?? null;
 
   return (
@@ -199,6 +203,16 @@ export function PhotoModal({
                   {promptEval?.raw_score !== null && promptEval?.raw_score !== undefined && (
                     <span style={{ color: "var(--text-dim)", fontSize: 10 }}>
                       {" "}(sim {promptEval.raw_score.toFixed(3)})
+                    </span>
+                  )}
+                </dd>
+                <dt>다큐 점수</dt>
+                <dd>
+                  {docEval?.ai_score?.toFixed(3) ?? "-"}
+                  <span style={{ color: "var(--text-dim)" }}> /100</span>
+                  {docEval?.raw_score !== null && docEval?.raw_score !== undefined && (
+                    <span style={{ color: "var(--text-dim)", fontSize: 10 }}>
+                      {" "}(sim {docEval.raw_score.toFixed(3)})
                     </span>
                   )}
                 </dd>
@@ -317,6 +331,14 @@ export function PhotoModal({
                 고급 평가 (Claude vision)
               </button>
 
+              <button
+                onClick={() => setShowPanel(true)}
+                disabled={busy}
+                style={{ marginTop: 8, background: "rgba(40, 100, 60, 0.85)" }}
+              >
+                다큐멘터리 패널 평가
+              </button>
+
               {advReviews.length > 0 && (
                 <div style={{ marginTop: 12 }}>
                   <div
@@ -424,6 +446,17 @@ export function PhotoModal({
           onClose={() => setShowAdvanced(false)}
           onDone={() => {
             setShowAdvanced(false);
+            void loadReviews();
+          }}
+        />
+      )}
+
+      {showPanel && (
+        <DocumentaryPanelDialog
+          photoId={photoId}
+          onClose={() => setShowPanel(false)}
+          onDone={() => {
+            setShowPanel(false);
             void loadReviews();
           }}
         />
@@ -918,6 +951,228 @@ function UserScoreEditor({
           제거
         </button>
       )}
+    </div>
+  );
+}
+
+function DocumentaryPanelDialog({
+  photoId,
+  onClose,
+  onDone,
+}: {
+  photoId: number;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [personas, setPersonas] = useState<
+    { id: string; name: string; description: string }[]
+  >([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [model, setModel] = useState<string>("");
+  const [models, setModels] = useState<ExternalModel[]>([]);
+  const [costPerCall, setCostPerCall] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [results, setResults] = useState<
+    { persona_id: string; persona_name?: string; score?: number | null; error?: string }[] | null
+  >(null);
+
+  useEffect(() => {
+    void api.advanced.listPersonas().then((r) => {
+      setPersonas(r.personas);
+      setSelected(new Set(r.personas.map((p) => p.id)));
+    });
+    void api.settings.get().then((s) => setModel(s.external_default_model));
+    void api.advanced.models().then((r) => setModels(r.models)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!model) return;
+    void api.advanced
+      .costPreview(photoId, model)
+      .then((r) => setCostPerCall(r.cost_usd_estimate))
+      .catch(() => setCostPerCall(null));
+  }, [photoId, model]);
+
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const totalCost =
+    costPerCall !== null ? costPerCall * selected.size : null;
+
+  const run = async () => {
+    if (selected.size === 0) return;
+    setBusy(true);
+    setError(null);
+    setResults(null);
+    try {
+      const r = await api.advanced.documentaryPanel(
+        photoId,
+        Array.from(selected),
+        model || null,
+      );
+      setResults(r.results);
+      // 잠시 후 자동으로 부모에 알리고 닫음 (이력에 추가됨)
+      setTimeout(onDone, 1800);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal-bg" onClick={onClose} style={{ zIndex: 200 }}>
+      <div
+        className="modal"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          maxWidth: 640,
+          flexDirection: "column",
+          padding: 22,
+          maxHeight: "90vh",
+          overflowY: "auto",
+        }}
+      >
+        <h3 style={{ margin: "0 0 12px 0" }}>다큐멘터리 패널 평가</h3>
+        <p style={{ color: "var(--text-dim)", fontSize: 12, margin: "0 0 12px 0" }}>
+          유명 다큐멘터리 사진작가 스타일의 비평 페르소나 각각이 동일 사진을 독립적으로
+          평가합니다. 각 응답에는 마지막 줄에 0–100점이 포함되며 고급 평가 이력에 누적됩니다.
+        </p>
+
+        <label style={{ color: "var(--text-dim)", fontSize: 12, marginBottom: 4 }}>
+          모델
+        </label>
+        <select
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          disabled={busy}
+        >
+          {models.length === 0 ? (
+            <option value={model}>{model}</option>
+          ) : (
+            models.map((m) => (
+              <option key={m.id} value={m.id}>
+                [{m.provider}] {m.id}
+              </option>
+            ))
+          )}
+        </select>
+
+        <div style={{ marginTop: 14 }}>
+          <div style={{ color: "var(--text-dim)", fontSize: 12, marginBottom: 6 }}>
+            평가자 페르소나 ({selected.size}/{personas.length} 선택)
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {personas.map((p) => (
+              <label
+                key={p.id}
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  alignItems: "flex-start",
+                  cursor: "pointer",
+                  background: "var(--panel-2)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 4,
+                  padding: 8,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={selected.has(p.id)}
+                  onChange={() => toggle(p.id)}
+                  disabled={busy}
+                />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 12 }}>{p.name}</div>
+                  <div style={{ color: "var(--text-dim)", fontSize: 11 }}>
+                    {p.description}
+                  </div>
+                </div>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div
+          style={{
+            marginTop: 14,
+            background: "var(--panel)",
+            padding: 8,
+            borderRadius: 4,
+            fontSize: 12,
+            color: "var(--text-dim)",
+          }}
+        >
+          예상 비용:{" "}
+          <strong style={{ color: "var(--text)" }}>
+            {totalCost !== null
+              ? `$${totalCost.toFixed(4)} (1회 $${costPerCall?.toFixed(4)} × ${selected.size})`
+              : "..."}
+          </strong>
+        </div>
+
+        {results && (
+          <div
+            style={{
+              marginTop: 12,
+              background: "var(--panel-2)",
+              padding: 10,
+              borderRadius: 4,
+              fontSize: 12,
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>결과 요약</div>
+            {results.map((r) => (
+              <div
+                key={r.persona_id}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  marginBottom: 3,
+                }}
+              >
+                <span>{r.persona_name ?? r.persona_id}</span>
+                <span style={{ color: r.error ? "var(--danger)" : "var(--text)" }}>
+                  {r.error
+                    ? `실패: ${r.error.slice(0, 60)}`
+                    : r.score !== null && r.score !== undefined
+                    ? `${r.score.toFixed(0)} / 100`
+                    : "-"}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {error && (
+          <div style={{ color: "var(--danger)", marginTop: 10, fontSize: 12 }}>
+            {error}
+          </div>
+        )}
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 8,
+            marginTop: 14,
+          }}
+        >
+          <button className="ghost" onClick={onClose} disabled={busy}>
+            취소
+          </button>
+          <button onClick={run} disabled={busy || selected.size === 0}>
+            {busy ? "평가 중..." : `${selected.size}명에게 평가 요청`}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

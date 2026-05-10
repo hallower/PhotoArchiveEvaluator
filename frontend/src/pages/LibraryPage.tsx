@@ -20,6 +20,8 @@ const SORT_OPTIONS = [
   { value: "score", label: "미학 점수 ↑" },
   { value: "-prompt", label: "prompt 점수 ↓" },
   { value: "prompt", label: "prompt 점수 ↑" },
+  { value: "-doc", label: "다큐 점수 ↓" },
+  { value: "doc", label: "다큐 점수 ↑" },
   { value: "-id", label: "최근 등록" },
 ];
 
@@ -27,7 +29,7 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [total, setTotal] = useState(0);
   const [minScore, setMinScore] = useState<number>(80.0);
-  const [sort, setSort] = useState<string>("-score");
+  const [sort, setSort] = useState<string>("-doc");
   const [loading, setLoading] = useState(false);
   const [openPhotoId, setOpenPhotoId] = useState<number | null>(null);
   const [openCluster, setOpenCluster] = useState<ClusterItem | null>(null);
@@ -37,7 +39,7 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
   const [searchActive, setSearchActive] = useState(false);
   const [keyword, setKeyword] = useState("");
   const [advancedFilter, setAdvancedFilter] = useState<"all" | "with" | "without">("all");
-  const [clusterMode, setClusterMode] = useState(false);
+  const [clusterMode, setClusterMode] = useState(true);
   const [clusterDistance, setClusterDistance] = useState<number>(8);
   const [selected, setSelectedSet] = useState<Set<number>>(new Set());
   const [showPortfolios, setShowPortfolios] = useState(false);
@@ -124,6 +126,8 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
         eval_model_id: null,
         prompt_score: it.similarity,
         prompt_raw: it.similarity,
+        documentary_score: null,
+        documentary_raw: null,
         user_score: null,
         final_score: it.similarity,
         thumb_url: it.thumb_url,
@@ -639,6 +643,24 @@ function Card({
           }}
         >
           고급 {photo.advanced_review_count}
+        </div>
+      ) : null}
+      {photo.documentary_score !== null && photo.documentary_score !== undefined ? (
+        <div
+          title={`다큐멘터리 점수 ${photo.documentary_score.toFixed(1)} / 100`}
+          style={{
+            position: "absolute",
+            bottom: 36,
+            right: 6,
+            background: "rgba(40, 100, 60, 0.85)",
+            color: "white",
+            padding: "1px 6px",
+            borderRadius: 10,
+            fontSize: 10,
+            fontWeight: 600,
+          }}
+        >
+          DOC {photo.documentary_score.toFixed(0)}
         </div>
       ) : null}
       <div className="info">

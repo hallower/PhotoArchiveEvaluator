@@ -27,6 +27,8 @@ export interface PhotoSummary {
   eval_model_id: string | null;
   prompt_score: number | null;
   prompt_raw: number | null;
+  documentary_score: number | null;
+  documentary_raw: number | null;
   user_score: number | null;
   final_score: number | null;
   advanced_review_count?: number;
@@ -415,6 +417,33 @@ export const api = {
         tokens_out: number | null;
         cost_usd: number;
       }>("POST", "/api/advanced/translate", { text, target_lang }),
+    listPersonas: () =>
+      request<{
+        personas: { id: string; name: string; description: string }[];
+      }>("GET", "/api/advanced/panel-personas"),
+    documentaryPanel: (
+      photo_id: number,
+      photographers?: string[] | null,
+      model?: string | null,
+    ) =>
+      request<{
+        results: {
+          id?: number;
+          persona_id: string;
+          persona_name?: string;
+          model_id?: string;
+          score?: number | null;
+          response?: string;
+          cost_usd?: number | null;
+          tokens_in?: number | null;
+          tokens_out?: number | null;
+          created_at?: string;
+          error?: string;
+        }[];
+      }>("POST", `/api/photos/${photo_id}/documentary-panel`, {
+        photographers: photographers ?? null,
+        model: model ?? null,
+      }),
   },
   backup: {
     trigger: () =>
@@ -485,5 +514,11 @@ export const api = {
       request<{ prompt: string }>("PUT", "/api/eval/prompt", { prompt }),
     rescorePrompt: () =>
       request<{ queued: boolean }>("POST", "/api/eval/rescore-prompt"),
+    getDocumentaryPrompt: () =>
+      request<{ prompt: string; default: string }>("GET", "/api/eval/documentary-prompt"),
+    putDocumentaryPrompt: (prompt: string) =>
+      request<{ prompt: string }>("PUT", "/api/eval/documentary-prompt", { prompt }),
+    rescoreDocumentary: () =>
+      request<{ queued: boolean }>("POST", "/api/eval/rescore-documentary"),
   },
 };

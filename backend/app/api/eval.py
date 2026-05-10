@@ -14,11 +14,18 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..auth.dependencies import require_auth
-from ..evaluator.rescore import recalibrate_aesthetic, rescore_prompt
+from ..evaluator.rescore import (
+    recalibrate_aesthetic,
+    rescore_documentary,
+    rescore_prompt,
+)
 from ..evaluator.worker import EvaluatorWorker
 from ..settings_store import (
+    DEFAULT_DOCUMENTARY_PROMPT,
     DEFAULT_EVAL_PROMPT,
+    EVAL_DOCUMENTARY_PROMPT,
     EVAL_PROMPT,
+    get_documentary_prompt,
     get_eval_prompt,
     set_value,
 )
@@ -104,3 +111,35 @@ def trigger_recalibrate_aesthetic() -> dict:
     """
     updated = recalibrate_aesthetic(SessionLocal)
     return {"updated": updated}
+
+
+@router.get("/documentary-prompt")
+def get_documentary_prompt_endpoint(session: Session = Depends(get_session)) -> dict:
+    return {
+        "prompt": get_documentary_prompt(session),
+        "default": DEFAULT_DOCUMENTARY_PROMPT,
+    }
+
+
+@router.put("/documentary-prompt")
+def put_documentary_prompt(
+    body: _PromptUpdate, session: Session = Depends(get_session)
+) -> dict:
+    text = body.prompt.strip()
+    if not text:
+        text = DEFAULT_DOCUMENTARY_PROMPT
+    set_value(session, EVAL_DOCUMENTARY_PROMPT, text)
+    return {"prompt": text}
+
+
+@router.post("/rescore-documentary", status_code=status.HTTP_202_ACCEPTED)
+def trigger_rescore_documentary() -> dict:
+    """저장된 임베딩으로 documentary 점수를 재계산 (CLIP text forward 1회만)."""
+    thread = threading.Thread(
+        target=rescore_documentary,
+        args=(SessionLocal,),
+        daemon=True,
+        name="documentary-rescore",
+    )
+    thread.start()
+    return {"queued": True}

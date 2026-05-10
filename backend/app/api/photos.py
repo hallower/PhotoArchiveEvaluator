@@ -56,6 +56,8 @@ _SORT_OPTIONS = {
     "final",
     "-prompt",
     "prompt",
+    "-doc",
+    "doc",
     "-id",
     "id",
 }
@@ -84,10 +86,10 @@ def list_photos(
     if sort not in _SORT_OPTIONS:
         sort = "-taken_at"
 
-    # 미학(aesthetic) 점수: model_id != 'clip-prompt' 의 최신 1행
+    # 미학(aesthetic) 점수: clip-prompt / clip-documentary 가 아닌 최신 1행
     aest_sub = (
         select(Evaluation.photo_id, func.max(Evaluation.id).label("eval_id"))
-        .where(Evaluation.model_id != "clip-prompt")
+        .where(Evaluation.model_id.notin_(("clip-prompt", "clip-documentary")))
         .group_by(Evaluation.photo_id)
         .subquery()
     )
@@ -101,6 +103,15 @@ def list_photos(
         .subquery()
     )
     pe = aliased(Evaluation)
+
+    # documentary 점수: model_id == 'clip-documentary' 의 최신 1행
+    doc_sub = (
+        select(Evaluation.photo_id, func.max(Evaluation.id).label("eval_id"))
+        .where(Evaluation.model_id == "clip-documentary")
+        .group_by(Evaluation.photo_id)
+        .subquery()
+    )
+    de = aliased(Evaluation)
 
     # 고급 평가 횟수: 카드에 배지로 표시하기 위한 사진별 카운트
     adv_sub = (
@@ -137,6 +148,8 @@ def list_photos(
             e.model_id.label("eval_model_id"),
             pe.ai_score.label("prompt_score"),
             pe.raw_score.label("prompt_raw"),
+            de.ai_score.label("documentary_score"),
+            de.raw_score.label("documentary_raw"),
             UserScore.score.label("user_score"),
             final_score.label("final_score"),
             func.coalesce(adv_sub.c.adv_count, 0).label("advanced_review_count"),
@@ -145,6 +158,8 @@ def list_photos(
         .outerjoin(e, e.id == aest_sub.c.eval_id)
         .outerjoin(prompt_sub, prompt_sub.c.photo_id == Photo.id)
         .outerjoin(pe, pe.id == prompt_sub.c.eval_id)
+        .outerjoin(doc_sub, doc_sub.c.photo_id == Photo.id)
+        .outerjoin(de, de.id == doc_sub.c.eval_id)
         .outerjoin(UserScore, UserScore.photo_id == Photo.id)
         .outerjoin(adv_sub, adv_sub.c.photo_id == Photo.id)
         .where(Photo.state == "active")
@@ -182,6 +197,8 @@ def list_photos(
         "final": asc(final_score),
         "-prompt": desc(pe.ai_score),
         "prompt": asc(pe.ai_score),
+        "-doc": desc(de.ai_score),
+        "doc": asc(de.ai_score),
         "-id": desc(Photo.id),
         "id": asc(Photo.id),
     }[sort]
@@ -209,6 +226,8 @@ def list_photos(
             "eval_model_id": r.eval_model_id,
             "prompt_score": r.prompt_score,
             "prompt_raw": r.prompt_raw,
+            "documentary_score": r.documentary_score,
+            "documentary_raw": r.documentary_raw,
             "user_score": r.user_score,
             "final_score": r.final_score,
             "advanced_review_count": int(r.advanced_review_count or 0),

@@ -240,6 +240,209 @@ def _estimate_cost_no_call(model: str, width: int, height: int, max_out: int = 1
     return (in_tokens * in_p + max_out * out_p) / 1_000_000
 
 
+# ─── 다큐멘터리 패널 평가 ────────────────────────────────────────────────
+#
+# 유명 다큐멘터리 사진작가들의 비평 관점에서 같은 사진을 N번 평가한다.
+# 각 페르소나는 그 작가의 잘 알려진 미학적 가치/관점을 따라 점수와 비평을 낸다.
+# (작가 본인을 흉내내는 것이 아니라 그 스타일/철학의 비평가 페르소나로 동작)
+
+DOCUMENTARY_PERSONAS: dict[str, dict[str, str]] = {
+    "cartier-bresson": {
+        "name": "Henri Cartier-Bresson 스타일",
+        "description": "결정적 순간(decisive moment), 기하학적 구도, 거리 사진의 즉흥성",
+        "prompt_focus": (
+            "the 'decisive moment' aesthetic — the precise instant when "
+            "form and content align in a single frame. Geometry, timing, "
+            "and the photographer's invisibility on the street."
+        ),
+    },
+    "salgado": {
+        "name": "Sebastião Salgado 스타일",
+        "description": "인도주의·환경, 흑백 톤, 노동·존엄·재해의 서사적 규모",
+        "prompt_focus": (
+            "humanitarian and environmental gravity — dignity in labor, "
+            "monumental tonal range in black-and-white, the sublime "
+            "scale of human or natural drama, ethical witness."
+        ),
+    },
+    "eugene-smith": {
+        "name": "W. Eugene Smith 스타일",
+        "description": "휴머니즘 포토 에세이, 도덕적 차원, 감정의 깊이",
+        "prompt_focus": (
+            "humanist photo essay tradition — moral dimension, "
+            "compassionate intimacy, dramatic chiaroscuro, the photograph "
+            "as an argument about human condition."
+        ),
+    },
+    "mary-ellen-mark": {
+        "name": "Mary Ellen Mark 스타일",
+        "description": "주변부의 사람들, 친밀한 초상, 사회적 다큐멘터리",
+        "prompt_focus": (
+            "intimate documentary portraiture of marginalized lives — "
+            "trust and proximity with the subject, unflinching honesty, "
+            "the photograph as a long-term relationship rather than a snap."
+        ),
+    },
+}
+
+
+def _build_panel_prompt(persona_id: str, persona: dict[str, str]) -> str:
+    return (
+        f"You are reviewing a photograph from the perspective of a documentary "
+        f"photography critic informed by {persona['name']}: "
+        f"{persona['prompt_focus']}\n\n"
+        "Evaluate this photograph as documentary work. Be specific and concrete "
+        "(do not generalize). Address:\n"
+        "1. Subject and storytelling — what real-world moment is captured?\n"
+        "2. Decisive moment / authenticity — is it candid and true?\n"
+        "3. Composition and visual language relative to documentary tradition\n"
+        "4. Emotional truth and viewer's empathy\n"
+        "5. Shortcomings as a documentary image\n\n"
+        "Conclude with a single line in the EXACT format:\n"
+        "  SCORE: NN/100\n"
+        "where NN is your documentary-photography score (0–100). Be honest — "
+        "if the image is a casual snapshot or pure aesthetic with no documentary "
+        "value, give a low score. Reserve 80+ for images with genuine "
+        "photojournalistic depth."
+    )
+
+
+class _PanelIn(BaseModel):
+    photographers: list[str] | None = None  # None or empty → all personas
+    model: str | None = None
+    note: str | None = None
+
+
+def _extract_score(text: str) -> float | None:
+    """응답 어딘가의 'SCORE: NN' / 'SCORE: NN/100' 형식에서 0-100 점수 추출. 실패 시 None."""
+    import re
+
+    m = re.search(r"SCORE\s*:?\s*(\d{1,3})(?:\s*/\s*100)?", text, re.IGNORECASE)
+    if not m:
+        return None
+    try:
+        v = float(m.group(1))
+    except ValueError:
+        return None
+    return max(0.0, min(100.0, v))
+
+
+@router.get("/api/advanced/panel-personas")
+def list_personas() -> dict:
+    """사용 가능한 다큐멘터리 비평 페르소나 목록."""
+    return {
+        "personas": [
+            {"id": pid, "name": p["name"], "description": p["description"]}
+            for pid, p in DOCUMENTARY_PERSONAS.items()
+        ],
+    }
+
+
+@router.post("/api/photos/{photo_id}/documentary-panel")
+def documentary_panel(
+    photo_id: int,
+    body: _PanelIn,
+    session: Session = Depends(get_session),
+) -> dict:
+    """선택된 다큐 페르소나들로 동일 사진을 N번 평가. 각각이 AdvancedReview로 저장됨."""
+    if not get_external_allow_send(session):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "external API send is disabled — enable in Settings",
+        )
+
+    model = body.model or get_external_default_model(session)
+    if model not in MODELS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"unsupported model: {model}")
+
+    provider = get_provider(model) or "anthropic"
+    api_key = api_keys.get(provider)
+    if not api_key:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{provider} API key not set",
+        )
+
+    requested = body.photographers
+    if not requested:
+        requested = list(DOCUMENTARY_PERSONAS.keys())
+    unknown = [p for p in requested if p not in DOCUMENTARY_PERSONAS]
+    if unknown:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"unknown persona(s): {unknown}"
+        )
+
+    photo = session.get(Photo, photo_id)
+    if photo is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "photo not found")
+    pp = session.execute(
+        select(PhotoPath).where(PhotoPath.photo_id == photo_id).limit(1)
+    ).scalar_one_or_none()
+    if pp is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "photo path not found")
+    try:
+        content = _read_image(session, pp)
+    except FileNotFoundError as exc:
+        raise HTTPException(status.HTTP_410_GONE, "source missing") from exc
+    if get_external_strip_exif(session):
+        content = strip_exif_jpeg(content)
+
+    results: list[dict] = []
+    for persona_id in requested:
+        persona = DOCUMENTARY_PERSONAS[persona_id]
+        prompt = _build_panel_prompt(persona_id, persona)
+        try:
+            client = make_adapter(model, api_key)
+            r = client.review(content, prompt)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("panel review failed (%s, %s)", persona_id, model)
+            results.append({"persona_id": persona_id, "error": str(exc)})
+            continue
+
+        # 페르소나 식별이 보이도록 model_id에 접미사 + raw_response에 메타 기록.
+        review_model_id = f"{r.model_id}#panel:{persona_id}"
+        review = AdvancedReview(
+            photo_id=photo_id,
+            model_id=review_model_id,
+            prompt=prompt,
+            response=r.response,
+            cost_usd=r.cost_usd,
+            tokens_in=r.tokens_in,
+            tokens_out=r.tokens_out,
+            user_note=body.note,
+        )
+        session.add(review)
+        if r.cost_usd is not None:
+            session.add(
+                ApiCost(
+                    model_id=review_model_id,
+                    photo_id=photo_id,
+                    cost_usd=r.cost_usd,
+                    tokens_in=r.tokens_in,
+                    tokens_out=r.tokens_out,
+                )
+            )
+        session.commit()
+        session.refresh(review)
+        score = _extract_score(r.response)
+        results.append(
+            {
+                "id": review.id,
+                "persona_id": persona_id,
+                "persona_name": persona["name"],
+                "model_id": review.model_id,
+                "score": score,
+                "response": review.response,
+                "cost_usd": review.cost_usd,
+                "tokens_in": review.tokens_in,
+                "tokens_out": review.tokens_out,
+                "created_at": review.created_at.isoformat(),
+            }
+        )
+
+    return {"results": results}
+
+
 @router.get("/api/advanced/models")
 def list_models() -> dict:
     return {

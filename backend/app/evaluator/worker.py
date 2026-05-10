@@ -27,7 +27,7 @@ from ..ai.base import CaptionModel, ScoreModel, TagModel
 from ..ai.embed import EmbeddingModel, cosine_similarity
 from ..nas.dsm import DSMClient
 from ..nas.session import open_dsm_client
-from ..settings_store import get_eval_prompt
+from ..settings_store import get_documentary_prompt, get_eval_prompt
 from ..storage.models import Embedding, EvalJob, Evaluation, PhotoPath, PhotoTag, Tag
 
 log = logging.getLogger(__name__)
@@ -81,6 +81,8 @@ def default_tag_model() -> TagModel:
 
 PROMPT_MODEL_ID = "clip-prompt"
 PROMPT_MODEL_VERSION = "vit-l-14"
+DOCUMENTARY_MODEL_ID = "clip-documentary"
+DOCUMENTARY_MODEL_VERSION = "vit-l-14"
 
 
 def _prompt_score(cosine_sim: float) -> float:
@@ -108,7 +110,9 @@ class EvaluatorWorker:
         self._caption_model = caption_model
         self._tag_model = tag_model
         self._dsm_client: DSMClient | None = None
-        self._prompt_text_cache: tuple[str, bytes] | None = None  # (prompt, text_vec)
+        # 동일 프롬프트의 CLIP text embedding을 캐시 (prompt → vec).
+        # eval(미학)/documentary 두 슬롯이 독립적으로 캐시된다.
+        self._text_vec_cache: dict[str, bytes] = {}
 
     @property
     def model(self) -> ScoreModel:
@@ -136,14 +140,15 @@ class EvaluatorWorker:
 
     def _prompt_text_vector(self, prompt: str) -> bytes:
         """프롬프트의 CLIP text embedding을 캐시. 동일 prompt면 재사용."""
-        if self._prompt_text_cache and self._prompt_text_cache[0] == prompt:
-            return self._prompt_text_cache[1]
+        cached = self._text_vec_cache.get(prompt)
+        if cached is not None:
+            return cached
         with _gpu_lock:
-            # double-check after acquiring lock
-            if self._prompt_text_cache and self._prompt_text_cache[0] == prompt:
-                return self._prompt_text_cache[1]
+            cached = self._text_vec_cache.get(prompt)
+            if cached is not None:
+                return cached
             result = self.embed.embed_text(prompt)
-            self._prompt_text_cache = (prompt, result.vector)
+            self._text_vec_cache[prompt] = result.vector
         return result.vector
 
     def run(self, max_jobs: int | None = None) -> int:
@@ -214,6 +219,11 @@ class EvaluatorWorker:
             text_vec = self._prompt_text_vector(prompt_text)
             sim = cosine_similarity(image_emb.vector, text_vec)
             prompt_score = _prompt_score(sim)
+            # documentary 점수: 같은 image embedding으로 documentary prompt와 cosine
+            doc_prompt_text = get_documentary_prompt(session)
+            doc_text_vec = self._prompt_text_vector(doc_prompt_text)
+            doc_sim = cosine_similarity(image_emb.vector, doc_text_vec)
+            doc_score = _prompt_score(doc_sim)
             # 태그는 이미 만들어둔 image embedding으로 cosine — 추가 GPU 호출 없음
             tag_result = self.tagger.tag_from_embedding(image_emb.vector)
         except Exception as exc:  # noqa: BLE001
@@ -252,8 +262,19 @@ class EvaluatorWorker:
                 raw_response=json.dumps({"prompt": prompt_text}, ensure_ascii=False),
             )
         )
+        # 4) documentary 점수 (CLIP cosine, 같은 image embedding 재사용)
+        session.add(
+            Evaluation(
+                photo_id=photo_id,
+                model_id=DOCUMENTARY_MODEL_ID,
+                model_version=DOCUMENTARY_MODEL_VERSION,
+                ai_score=doc_score,
+                raw_score=doc_sim,
+                raw_response=json.dumps({"prompt": doc_prompt_text}, ensure_ascii=False),
+            )
+        )
 
-        # 4) 태그 upsert
+        # 5) 태그 upsert
         _upsert_tags(session, photo_id, tag_result.tags)
 
         job.state = "done"
