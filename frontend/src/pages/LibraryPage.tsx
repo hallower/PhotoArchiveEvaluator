@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   type ClusterItem,
@@ -6,11 +6,13 @@ import {
   type PhotoSummary,
   type PortfolioSummary,
   type QueueCounts,
+  type ScanJob,
 } from "../api";
 import { ContestsPage } from "./ContestsPage";
 import { PhotoModal } from "./PhotoModal";
 import { PortfoliosPage } from "./PortfoliosPage";
 import { SettingsPage } from "./SettingsPage";
+import { ToastStack, type ToastItem } from "./Toast";
 
 const SORT_OPTIONS = [
   { value: "-taken_at", label: "촬영일 ↓" },
@@ -45,6 +47,26 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
   const [showPortfolios, setShowPortfolios] = useState(false);
   const [portfolios, setPortfolios] = useState<PortfolioSummary[]>([]);
   const [showContests, setShowContests] = useState(false);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+
+  // 주기 폴링 기준선 — 첫 폴링은 과거 내역으로 토스트를 띄우지 않기 위해 추적
+  const seenDoneJobs = useRef<Set<number>>(new Set());
+  const prevEvalDone = useRef<number | null>(null);
+  const pollReady = useRef(false);
+
+  const pushToast = useCallback((text: string, kind: ToastItem["kind"]) => {
+    const id = Date.now() + Math.random();
+    setToasts((cur) => [...cur, { id, text, kind }]);
+    window.setTimeout(
+      () => setToasts((cur) => cur.filter((t) => t.id !== id)),
+      9000,
+    );
+  }, []);
+
+  const dismissToast = useCallback(
+    (id: number) => setToasts((cur) => cur.filter((t) => t.id !== id)),
+    [],
+  );
 
   const toggleSelected = (id: number) =>
     setSelectedSet((prev) => {
@@ -139,23 +161,59 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
     }
   }, [searchQuery, fetchList]);
 
-  const fetchQueue = useCallback(async () => {
+  // 평가 큐 + 스캔 잡을 함께 폴링. 새 스캔/평가 완료를 감지하면 토스트로 알림.
+  const pollActivity = useCallback(async () => {
+    let q: QueueCounts;
+    let jobs: ScanJob[];
     try {
-      setQueue(await api.eval.queue());
+      [q, jobs] = await Promise.all([
+        api.eval.queue(),
+        api.scan.jobs({ limit: 20 }),
+      ]);
     } catch {
-      // 무시 — 인증 만료 등은 상위 App에서 처리
+      return; // 무시 — 인증 만료 등은 상위 App에서 처리
     }
-  }, []);
+    setQueue(q);
+
+    if (!pollReady.current) {
+      // 첫 폴링은 기준선만 기록 — 과거 내역으로 토스트를 띄우지 않음
+      for (const j of jobs) {
+        if (j.state === "done") seenDoneJobs.current.add(j.id);
+      }
+      prevEvalDone.current = q.done;
+      pollReady.current = true;
+      return;
+    }
+
+    // 스캔 완료 → 신규 발견 알림 (같은 주기에 끝난 잡은 합산해 한 번만)
+    let newlyFound = 0;
+    for (const j of jobs) {
+      if (j.state === "done" && !seenDoneJobs.current.has(j.id)) {
+        seenDoneJobs.current.add(j.id);
+        newlyFound += j.new_photos;
+      }
+    }
+    if (newlyFound > 0) {
+      pushToast(`📷 새 사진 ${newlyFound}장 발견 — 평가를 시작합니다`, "scan");
+    }
+
+    // 평가 완료 → done 누적값 증가분만큼 알림
+    if (prevEvalDone.current !== null && q.done > prevEvalDone.current) {
+      const delta = q.done - prevEvalDone.current;
+      pushToast(`✅ 새 사진 ${delta}장 평가 완료`, "eval");
+    }
+    prevEvalDone.current = q.done;
+  }, [pushToast]);
 
   useEffect(() => {
     void fetchList();
   }, [fetchList]);
 
   useEffect(() => {
-    void fetchQueue();
-    const id = setInterval(() => void fetchQueue(), 5000);
+    void pollActivity();
+    const id = setInterval(() => void pollActivity(), 5000);
     return () => clearInterval(id);
-  }, [fetchQueue]);
+  }, [pollActivity]);
 
   const triggerScan = async () => {
     const folder = window.prompt("로컬 폴더 절대경로:");
@@ -559,6 +617,8 @@ export function LibraryPage({ onLogout }: { onLogout: () => void }) {
           onOpenPhoto={(id) => setOpenPhotoId(id)}
         />
       )}
+
+      <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }
